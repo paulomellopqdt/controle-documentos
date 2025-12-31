@@ -11,7 +11,7 @@ RETORNO_STATUS = ["Pendente", "Respondido"]
 # DB helpers (PostgreSQL / Supabase)
 # =========================================================
 def get_conn():
-    conn = psycopg.connect(
+    return psycopg.connect(
         host=str(st.secrets["DB_HOST"]).strip(),
         port=int(str(st.secrets["DB_PORT"]).strip()),
         dbname=str(st.secrets["DB_NAME"]).strip(),
@@ -20,7 +20,7 @@ def get_conn():
         connect_timeout=15,
         sslmode="require",
     )
-    return conn
+
 
 
 
