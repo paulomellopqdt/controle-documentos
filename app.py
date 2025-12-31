@@ -12,12 +12,12 @@ RETORNO_STATUS = ["Pendente", "Respondido"]
 # =========================================================
 def get_conn():
     conn = psycopg.connect(
-        host=st.secrets["DB_HOST"],
-        port=int(st.secrets["DB_PORT"]),
-        dbname=st.secrets["DB_NAME"],
-        user=st.secrets["DB_USER"],
-        password=st.secrets["DB_PASSWORD"],
-        connect_timeout=10,
+        host=str(st.secrets["DB_HOST"]).strip(),
+        port=int(str(st.secrets["DB_PORT"]).strip()),
+        dbname=str(st.secrets["DB_NAME"]).strip(),
+        user=str(st.secrets["DB_USER"]).strip(),
+        password=str(st.secrets["DB_PASSWORD"]).strip(),
+        connect_timeout=15,
         sslmode="require",
     )
     return conn
