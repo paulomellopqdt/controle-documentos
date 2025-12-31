@@ -1,0 +1,1260 @@
+import sqlite3
+from datetime import date, datetime
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+
+DB_PATH = "controle_docs.sqlite"
+RETORNO_STATUS = ["Pendente", "Respondido"]
+
+
+# =========================================================
+# DB helpers
+# =========================================================
+def get_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+    except Exception:
+        pass
+    return conn
+
+
+def _table_exists(conn, name: str) -> bool:
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+    return cur.fetchone() is not None
+
+
+def _table_info(conn, table: str):
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    rows = cur.fetchall()
+    return [{"cid": r[0], "name": r[1], "type": r[2], "notnull": r[3], "dflt": r[4], "pk": r[5]} for r in rows]
+
+
+def _has_column(conn, table: str, col: str) -> bool:
+    try:
+        cols = [c["name"] for c in _table_info(conn, table)]
+        return col in cols
+    except Exception:
+        return False
+
+
+def _ensure_column(conn, table: str, col: str, coltype: str):
+    cols = [c["name"] for c in _table_info(conn, table)]
+    if col not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+
+
+def _migrate_db():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS retornos_om (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        caso_id INTEGER,
+        om TEXT,
+        status TEXT,
+        prazo_om TEXT,
+        dt_resposta TEXT,
+        observacoes TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS master_oms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT UNIQUE,
+        created_at TEXT
+    )
+    """)
+    if _table_exists(conn, "master_oms") and not _has_column(conn, "master_oms", "created_at"):
+        _ensure_column(conn, "master_oms", "created_at", "TEXT")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS arquivados (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        caso_id INTEGER UNIQUE,
+        archived_at TEXT
+    )
+    """)
+
+    if not _table_exists(conn, "casos"):
+        cur.execute("""
+        CREATE TABLE casos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nr_doc_recebido TEXT NOT NULL,
+            assunto_doc TEXT NOT NULL,
+            origem TEXT,
+            prazo_final TEXT,
+            observacoes TEXT,
+            assunto_solic TEXT,
+            prazo_om TEXT,
+            nr_doc_solicitado TEXT,
+            nr_doc_resposta TEXT,
+            status TEXT,
+            resolved_at TEXT,
+            created_at TEXT
+        )
+        """)
+        conn.commit()
+        conn.close()
+        return
+
+    _ensure_column(conn, "casos", "nr_doc_resposta", "TEXT")
+    _ensure_column(conn, "casos", "resolved_at", "TEXT")
+
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# CRUD
+# =========================================================
+def fetch_casos():
+    conn = get_conn()
+    df = pd.read_sql("SELECT * FROM casos ORDER BY id DESC", conn)
+    conn.close()
+    return df
+
+
+def fetch_caso(caso_id: int):
+    conn = get_conn()
+    df = pd.read_sql("SELECT * FROM casos WHERE id = ?", conn, params=(caso_id,))
+    conn.close()
+    return df.iloc[0].to_dict() if not df.empty else None
+
+
+def fetch_caso_by_nr_recebido(nr_doc_recebido: str):
+    nr = (nr_doc_recebido or "").strip()
+    if not nr:
+        return None
+    conn = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM casos WHERE nr_doc_recebido = ? ORDER BY id DESC LIMIT 1",
+        conn, params=(nr,)
+    )
+    conn.close()
+    return df.iloc[0].to_dict() if not df.empty else None
+
+
+def update_documento_by_nr_recebido(nr_doc_recebido: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None):
+    conn = get_conn()
+    conn.execute("""
+        UPDATE casos
+        SET assunto_doc = ?, origem = ?, prazo_final = ?, observacoes = ?
+        WHERE nr_doc_recebido = ?
+    """, (
+        (assunto_doc or "").strip(),
+        (origem or "").strip() if origem and origem.strip() else None,
+        prazo_final.isoformat() if prazo_final else None,
+        (obs or "").strip() if obs and obs.strip() else None,
+        (nr_doc_recebido or "").strip()
+    ))
+    conn.commit()
+    conn.close()
+
+
+def fetch_retornos(caso_id: int):
+    conn = get_conn()
+    df = pd.read_sql("SELECT * FROM retornos_om WHERE caso_id = ? ORDER BY om", conn, params=(caso_id,))
+    conn.close()
+    return df
+
+
+def fetch_pendencias():
+    conn = get_conn()
+    df = pd.read_sql("""
+        SELECT caso_id, COUNT(*) qtd
+        FROM retornos_om
+        WHERE status = 'Pendente'
+        GROUP BY caso_id
+    """, conn)
+    conn.close()
+    return df
+
+
+def delete_caso(caso_id: int):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM retornos_om WHERE caso_id = ?", (caso_id,))
+    cur.execute("DELETE FROM arquivados WHERE caso_id = ?", (caso_id,))
+    cur.execute("DELETE FROM casos WHERE id = ?", (caso_id,))
+    conn.commit()
+    conn.close()
+
+
+def set_resposta_e_status(caso_id: int, nr_doc_resposta: str | None):
+    nr = (nr_doc_resposta or "").strip()
+    conn = get_conn()
+    if nr:
+        conn.execute(
+            "UPDATE casos SET nr_doc_resposta = ?, status = 'Resolvido', resolved_at = ? WHERE id = ?",
+            (nr, date.today().isoformat(), caso_id)
+        )
+    else:
+        conn.execute(
+            "UPDATE casos SET nr_doc_resposta = NULL, status = 'Pendente', resolved_at = NULL WHERE id = ?",
+            (caso_id,)
+        )
+    conn.commit()
+    conn.close()
+
+
+# --------- Arquivados ----------
+def archive_caso(caso_id: int):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO arquivados (caso_id, archived_at) VALUES (?, ?)",
+            (caso_id, datetime.now().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def unarchive_caso(caso_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM arquivados WHERE caso_id = ?", (caso_id,))
+    conn.commit()
+    conn.close()
+
+
+def fetch_arquivados_ids() -> set[int]:
+    conn = get_conn()
+    df = pd.read_sql("SELECT caso_id FROM arquivados", conn)
+    conn.close()
+    if df.empty:
+        return set()
+    return set(df["caso_id"].astype(int).tolist())
+
+
+def fetch_arquivados_casos() -> pd.DataFrame:
+    conn = get_conn()
+    df = pd.read_sql("""
+        SELECT c.*
+        FROM casos c
+        JOIN arquivados a ON a.caso_id = c.id
+        ORDER BY a.archived_at DESC
+    """, conn)
+    conn.close()
+    return df
+
+
+# --------- Master Responsáveis ----------
+def _normalize_name(s: str) -> str:
+    return (s or "").replace("\u00A0", " ").strip()
+
+
+def get_master_oms():
+    conn = get_conn()
+    df = pd.read_sql("SELECT nome FROM master_oms ORDER BY nome", conn)
+    conn.close()
+    return df["nome"].tolist()
+
+
+def add_master_om(nome: str):
+    nome = _normalize_name(nome)
+    if not nome:
+        return False, "Informe o nome do Responsável."
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM master_oms WHERE LOWER(TRIM(nome)) = LOWER(TRIM(?)) LIMIT 1", (nome,))
+        if cur.fetchone():
+            return False, "Esse Responsável já existe."
+
+        if _has_column(conn, "master_oms", "created_at"):
+            conn.execute(
+                "INSERT INTO master_oms (nome, created_at) VALUES (?, ?)",
+                (nome, datetime.now().isoformat())
+            )
+        else:
+            conn.execute("INSERT INTO master_oms (nome) VALUES (?)", (nome,))
+        conn.commit()
+        return True, f"Responsável adicionado: {nome}"
+    except Exception as e:
+        return False, f"Erro ao adicionar: {e}"
+    finally:
+        conn.close()
+
+
+def delete_master_oms(nomes):
+    nomes = [_normalize_name(n) for n in (nomes or []) if _normalize_name(n)]
+    if not nomes:
+        return True, "Nada para remover."
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.executemany("DELETE FROM master_oms WHERE LOWER(TRIM(nome)) = LOWER(TRIM(?))", [(n,) for n in nomes])
+        cur.executemany("DELETE FROM retornos_om WHERE LOWER(TRIM(om)) = LOWER(TRIM(?))", [(n,) for n in nomes])
+        conn.commit()
+        return True, "Responsáveis removidos ✅"
+    except Exception as e:
+        return False, f"Erro ao remover: {e}"
+    finally:
+        conn.close()
+
+
+# --------- Documento / Solicitação ----------
+def insert_documento(nr_doc: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO casos
+        (nr_doc_recebido, assunto_doc, origem, prazo_final, observacoes, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        (nr_doc or "").strip() or "00",
+        (assunto_doc or "").strip(),
+        (origem or "").strip() if origem and origem.strip() else None,
+        prazo_final.isoformat() if prazo_final else None,
+        (obs or "").strip() if obs and obs.strip() else None,
+        "Recebido",
+        datetime.now().isoformat()
+    ))
+    conn.commit()
+    conn.close()
+
+
+def insert_solicitacao_sem_documento(assunto_solic: str, prazo_om: date | None, nr_doc_solicitado: str | None):
+    assunto_solic = (assunto_solic or "").strip() or "(sem solicitação)"
+    nr_doc_solicitado = (nr_doc_solicitado or "").strip() or "00"
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO casos
+        (nr_doc_recebido, assunto_doc, origem, prazo_final, observacoes,
+         assunto_solic, prazo_om, nr_doc_solicitado, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "-",   # recebido
+        "-",   # assunto doc
+        "-",   # origem
+        None,  # prazo final
+        "-",   # observacoes
+        assunto_solic,
+        prazo_om.isoformat() if prazo_om else None,
+        nr_doc_solicitado,
+        "Distribuído",
+        datetime.now().isoformat()
+    ))
+    sel_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sel_id
+
+
+def salvar_ou_atualizar_solicitacao(
+    caso_id: int,
+    assunto_solic: str | None,
+    prazo_om: date | None,
+    selecionadas: list[str],
+    nr_doc_solicitado: str | None
+):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE casos
+        SET assunto_solic = ?, prazo_om = ?, status = 'Distribuído', nr_doc_solicitado = ?
+        WHERE id = ?
+    """, (
+        (assunto_solic or "").strip() or None,
+        prazo_om.isoformat() if prazo_om else None,
+        (nr_doc_solicitado or "").strip() or None,
+        caso_id
+    ))
+
+    cur.execute("""
+        SELECT om, status, dt_resposta, observacoes
+        FROM retornos_om
+        WHERE caso_id = ?
+    """, (caso_id,))
+    existentes = {r[0]: {"status": r[1], "dt_resposta": r[2], "observacoes": r[3]} for r in cur.fetchall()}
+
+    selecionadas_set = set(selecionadas)
+
+    for om in list(existentes.keys()):
+        if om not in selecionadas_set:
+            cur.execute("DELETE FROM retornos_om WHERE caso_id = ? AND om = ?", (caso_id, om))
+
+    for om in selecionadas:
+        if om in existentes:
+            cur.execute("""
+                UPDATE retornos_om
+                SET prazo_om = ?
+                WHERE caso_id = ? AND om = ?
+            """, (prazo_om.isoformat() if prazo_om else None, caso_id, om))
+        else:
+            cur.execute("""
+                INSERT INTO retornos_om (caso_id, om, status, prazo_om, dt_resposta, observacoes)
+                VALUES (?, ?, 'Pendente', ?, NULL, NULL)
+            """, (caso_id, om, prazo_om.isoformat() if prazo_om else None))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# Seleção / Estado de formulário
+# =========================================================
+def _parse_caso_id_from_label(label: str) -> int | None:
+    if "(ID " not in label:
+        return None
+    try:
+        return int(label.split("(ID ")[1].split(")")[0])
+    except Exception:
+        return None
+
+
+def _clear_forms(keep_doc_select: bool = False):
+    st.session_state["selected_doc_id"] = None
+    st.session_state["doc_disabled"] = False
+
+    st.session_state["doc_nr"] = ""
+    st.session_state["doc_assunto_doc"] = ""
+    st.session_state["doc_origem"] = ""
+    st.session_state["doc_prazo_final"] = None
+    st.session_state["doc_obs"] = ""
+
+    st.session_state["sol_assunto_solic"] = ""
+    st.session_state["sol_prazo_om"] = None
+    st.session_state["sol_doc_solicitado"] = ""
+    st.session_state["sol_responsaveis"] = []
+
+    st.session_state["nr_doc_resposta_input"] = ""
+
+    if not keep_doc_select:
+        st.session_state["sol_doc_select"] = "00 | Nova Solicitação sem Documento"
+
+
+def _load_selected_document_into_forms():
+    label = st.session_state.get("sol_doc_select", "00 | Nova Solicitação sem Documento")
+
+    if label.startswith("00 | Nova"):
+        _clear_forms(keep_doc_select=True)
+        return
+
+    caso_id = _parse_caso_id_from_label(label)
+    if not caso_id:
+        _clear_forms(keep_doc_select=True)
+        return
+
+    caso = fetch_caso(caso_id)
+    if not caso:
+        _clear_forms(keep_doc_select=True)
+        return
+
+    st.session_state["selected_doc_id"] = caso_id
+
+    is_sem_doc = (caso.get("nr_doc_recebido") == "-" or caso.get("assunto_doc") == "-")
+    st.session_state["doc_disabled"] = bool(is_sem_doc)
+
+    st.session_state["doc_nr"] = caso.get("nr_doc_recebido") or ""
+    st.session_state["doc_assunto_doc"] = caso.get("assunto_doc") or ""
+    st.session_state["doc_origem"] = caso.get("origem") or ""
+    st.session_state["doc_prazo_final"] = pd.to_datetime(caso["prazo_final"]).date() if caso.get("prazo_final") else None
+    st.session_state["doc_obs"] = caso.get("observacoes") or ""
+
+    st.session_state["sol_assunto_solic"] = caso.get("assunto_solic") or ""
+    st.session_state["sol_prazo_om"] = pd.to_datetime(caso["prazo_om"]).date() if caso.get("prazo_om") else None
+    st.session_state["sol_doc_solicitado"] = caso.get("nr_doc_solicitado") or ""
+
+    ret = fetch_retornos(caso_id)
+    selecionados = ret["om"].tolist() if not ret.empty else []
+    master = set(get_master_oms())
+    st.session_state["sol_responsaveis"] = [r for r in selecionados if r in master]
+
+
+# =========================================================
+# Helpers UI
+# =========================================================
+def _fmt_date_iso_to_ddmmyyyy(v):
+    if not v:
+        return "-"
+    try:
+        return pd.to_datetime(v).strftime("%d/%m/%Y")
+    except Exception:
+        return "-"
+
+
+def _days_phrase(target_iso: str | None) -> tuple[str, bool]:
+    if not target_iso:
+        return ("-", False)
+    try:
+        d = pd.to_datetime(target_iso).date()
+    except Exception:
+        return ("-", False)
+
+    today = date.today()
+    diff = (d - today).days
+    if diff < 0:
+        return (f"{abs(diff)} dia(s) em atraso", True)
+    if diff == 0:
+        return ("vence hoje", False)
+    return (f"{diff} dia(s) para o prazo", False)
+
+
+def _answered_on_time_text(prazo_iso: str | None, resolved_at_iso: str | None) -> str:
+    if not prazo_iso or not resolved_at_iso:
+        return "-"
+    try:
+        prazo = pd.to_datetime(prazo_iso).date()
+        resp = pd.to_datetime(resolved_at_iso).date()
+    except Exception:
+        return "-"
+    diff = (resp - prazo).days
+    if diff <= 0:
+        return "Respondido no prazo"
+    return f"Respondido com atraso ({diff} dia(s))"
+
+
+def _parse_ddmmyyyy_to_date(s: str):
+    if not s or str(s).strip() in ["-", "NaT", "None"]:
+        return None
+    try:
+        return datetime.strptime(str(s).strip(), "%d/%m/%Y").date()
+    except Exception:
+        return None
+
+
+# ======== Cores Acompanhamento (pedido) ========
+# - vermelho: prazo final hoje OU em atraso
+# - amarelo: prazo final com 5 dias para o prazo (inclui 5,4,3,2,1) exceto hoje/atraso (já vermelho)
+# - verde: linha se status == Resolvido
+def _row_style_acompanhamento(row):
+    status = str(row.get("Status", "")).strip().lower()
+    if status == "resolvido":
+        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
+
+    prazo = _parse_ddmmyyyy_to_date(row.get("Prazo Final", ""))
+    if prazo is None:
+        return [""] * len(row)
+
+    today = date.today()
+    diff = (prazo - today).days
+
+    if diff <= 0:
+        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
+
+    if 1 <= diff <= 5:
+        return ["background-color: #fef9c3; color: #713f12;"] * len(row)
+
+    return [""] * len(row)
+
+
+# =========================================================
+# UI
+# =========================================================
+st.set_page_config(layout="wide")
+_migrate_db()
+
+dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+hoje = date.today()
+
+st.session_state.setdefault("sol_responsaveis", [])
+st.session_state.setdefault("doc_disabled", False)
+st.session_state.setdefault("sol_doc_select", "00 | Nova Solicitação sem Documento")
+
+c1, c2 = st.columns([4, 1])
+with c1:
+    st.title("📑 Controle de Documentos (Local)")
+with c2:
+    st.markdown(
+        f"<div style='text-align:right'><b>{dias[hoje.weekday()]}</b><br>{hoje.strftime('%d/%m/%Y')}</div>",
+        unsafe_allow_html=True
+    )
+
+abas = st.tabs(["📄 Documento", "📋 Acompanhamento", "🗄️ Arquivados"])
+
+
+# =========================================================
+# ABA DOCUMENTO
+# =========================================================
+with abas[0]:
+    col_doc, col_sep, col_sol = st.columns([1, 0.05, 1], gap="large")
+
+    with col_sep:
+        st.markdown("""<div style="height: 100%; border-left: 2px solid #e6e6e6; margin: 0 auto;"></div>""",
+                    unsafe_allow_html=True)
+
+    # -----------------------------
+    # Cadastrar Documento
+    # -----------------------------
+    with col_doc:
+        st.subheader("Cadastrar Documento")
+        doc_disabled = bool(st.session_state.get("doc_disabled", False))
+
+        r1c1, r1c2 = st.columns(2, gap="small")
+        with r1c1:
+            st.text_input("Nº do Documento (Recebido)", key="doc_nr", disabled=doc_disabled)
+        with r1c2:
+            st.text_input("Assunto do Documento", key="doc_assunto_doc", disabled=doc_disabled)
+
+        r2c1, r2c2 = st.columns(2, gap="small")
+        with r2c1:
+            st.text_input("Origem (opcional)", key="doc_origem", disabled=doc_disabled)
+        with r2c2:
+            st.date_input("Prazo Final", key="doc_prazo_final", value=None, disabled=doc_disabled, format="DD/MM/YYYY")
+
+        st.text_area("Observações", key="doc_obs", height=220, disabled=doc_disabled)
+
+        # clique -> pede confirmação (não limpa campos)
+        if st.button("Salvar Documento", type="primary", key="btn_salvar_doc_novo", disabled=doc_disabled):
+            nr_doc_in = (st.session_state.get("doc_nr") or "").strip()
+            assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
+
+            if not nr_doc_in or not assunto_doc:
+                st.error("Informe o Nº do Documento (Recebido) e o Assunto do Documento.")
+            else:
+                existente = fetch_caso_by_nr_recebido(nr_doc_in)
+
+                # se já existe: confirmar atualização
+                if existente and nr_doc_in not in ["00", "-"]:
+                    st.session_state["confirm_doc_action"] = {
+                        "mode": "update",
+                        "nr": nr_doc_in,
+                        "assunto_doc": assunto_doc,
+                        "origem": st.session_state.get("doc_origem") or "",
+                        "prazo_final": st.session_state.get("doc_prazo_final"),
+                        "obs": st.session_state.get("doc_obs") or ""
+                    }
+                else:
+                    st.session_state["confirm_doc_action"] = {
+                        "mode": "insert",
+                        "nr": nr_doc_in,
+                        "assunto_doc": assunto_doc,
+                        "origem": st.session_state.get("doc_origem") or "",
+                        "prazo_final": st.session_state.get("doc_prazo_final"),
+                        "obs": st.session_state.get("doc_obs") or ""
+                    }
+
+        if st.session_state.get("confirm_doc_action"):
+            payload = st.session_state["confirm_doc_action"]
+            if payload.get("mode") == "update":
+                st.warning(
+                    f"O Nº do Documento (Recebido) **{payload['nr']}** já existe. "
+                    "Deseja **ATUALIZAR** o documento existente com os dados informados?"
+                )
+            else:
+                st.warning("Confirma **SALVAR** este Documento recebido?")
+
+            cx1, cx2 = st.columns([0.25, 0.25], gap="small")
+            with cx1:
+                if st.button("Confirmar", type="primary", key="btn_confirm_doc"):
+                    try:
+                        if payload.get("mode") == "update":
+                            update_documento_by_nr_recebido(
+                                nr_doc_recebido=payload["nr"],
+                                assunto_doc=payload["assunto_doc"],
+                                origem=payload["origem"],
+                                prazo_final=payload["prazo_final"],
+                                obs=payload["obs"],
+                            )
+                            st.toast("Documento atualizado ✅")
+                        else:
+                            insert_documento(
+                                nr_doc=payload["nr"],
+                                assunto_doc=payload["assunto_doc"],
+                                origem=payload["origem"],
+                                prazo_final=payload["prazo_final"],
+                                obs=payload["obs"],
+                            )
+                            st.toast("Documento salvo ✅")
+
+                        st.session_state.pop("confirm_doc_action", None)
+                        _clear_forms()  # limpa tudo
+                        st.success("Operação concluída ✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state.pop("confirm_doc_action", None)
+                        st.error(f"Erro ao salvar documento: {e}")
+
+            with cx2:
+                if st.button("Cancelar", key="btn_cancel_doc"):
+                    st.session_state.pop("confirm_doc_action", None)
+                    st.info("Ação cancelada. (Campos mantidos)")
+
+    # -----------------------------
+    # Cadastrar / Atualizar Solicitação
+    # -----------------------------
+    with col_sol:
+        st.subheader("Cadastrar / Atualizar Solicitação")
+
+        # somente itens do ACOMPANHAMENTO (não arquivados)
+        df_all = fetch_casos()
+        arquivados_ids = fetch_arquivados_ids()
+        if not df_all.empty:
+            df_all = df_all[~df_all["id"].astype(int).isin(arquivados_ids)]
+
+        options = ["00 | Nova Solicitação sem Documento"]
+        if not df_all.empty:
+            for _, r in df_all.iterrows():
+                nr_rec = (r.get("nr_doc_recebido") or "").strip()
+                assunto_doc = (r.get("assunto_doc") or "").strip()
+                assunto_solic = (r.get("assunto_solic") or "").strip()
+                nr_solic = (r.get("nr_doc_solicitado") or "").strip()
+
+                # sem documento: agora SEM "00 |"
+                if nr_rec == "-" or assunto_doc == "-":
+                    label = f"{assunto_solic} | {nr_solic or '00'} (ID {r['id']})"
+                else:
+                    label = f"{nr_rec} | {assunto_doc} (ID {r['id']})"
+                options.append(label)
+
+        # mantém seleção válida
+        if st.session_state.get("sol_doc_select") not in options:
+            st.session_state["sol_doc_select"] = options[0]
+
+        st.selectbox(
+            "Documento",
+            options,
+            key="sol_doc_select",
+            on_change=_load_selected_document_into_forms
+        )
+
+        st.text_input("Assunto da Solicitação", key="sol_assunto_solic")
+
+        cS1, cS2 = st.columns([1, 1], gap="small")
+        with cS1:
+            st.date_input("Prazo das OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
+        with cS2:
+            st.text_input("Nr do documento (Solicitado)", key="sol_doc_solicitado")
+
+        st.markdown("### Responsável")
+
+        # expander em cima
+        with st.expander("Gerenciar responsáveis", expanded=False):
+            c_add1, c_add2 = st.columns([1, 0.25], gap="small")
+            with c_add1:
+                novo_nome = st.text_input("Adicionar novo responsável", key="resp_add_text")
+            with c_add2:
+                if st.button("Adicionar", key="resp_add_btn"):
+                    ok, msg = add_master_om(novo_nome)
+                    if ok:
+                        st.toast("Responsável adicionado ✅")
+                        st.session_state["resp_add_text"] = ""
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+            st.markdown("---")
+
+            lista_atual = get_master_oms()
+            remover = st.multiselect("Remover responsáveis do sistema", options=lista_atual, key="resp_del_ms")
+            if st.button("Remover selecionados", key="resp_del_btn"):
+                ok, msg = delete_master_oms(remover)
+                if ok:
+                    st.session_state["_remover_da_selecao"] = remover
+                    st.toast("Responsáveis removidos ✅")
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        # aplica remoções pendentes ANTES do multiselect de responsáveis
+        to_remove = st.session_state.pop("_remover_da_selecao", None)
+        if to_remove:
+            atuais = st.session_state.get("sol_responsaveis", []) or []
+            st.session_state["sol_responsaveis"] = [x for x in atuais if x not in set(to_remove)]
+
+        oms = get_master_oms()
+
+        # multiselect + botão salvar alinhado ao lado (compacto)
+        c_left, c_mid, c_right = st.columns([0.18, 1, 0.22], gap="small")
+        with c_left:
+            if st.button("Circular", key="resp_circular", disabled=(not oms)):
+                st.session_state["sol_responsaveis"] = oms[:]
+                st.rerun()
+
+        with c_mid:
+            st.multiselect(
+                "Responsáveis",
+                options=oms,
+                key="sol_responsaveis",
+                help="Digite para buscar. Você pode selecionar vários.",
+                label_visibility="collapsed"
+            )
+
+        with c_right:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            btn_salvar_solic = st.button("Salvar Solicitação", type="primary", key="btn_salvar_solic_compacto")
+
+        # clique -> pede confirmação (não limpa campos)
+        if btn_salvar_solic:
+            assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
+            selecionadas = st.session_state.get("sol_responsaveis", []) or []
+            nr_doc_solicitado = (st.session_state.get("sol_doc_solicitado") or "").strip() or "00"
+
+            if not assunto_solic:
+                st.error("Informe o Assunto da Solicitação.")
+            elif not selecionadas:
+                st.error("Selecione ao menos 1 Responsável.")
+            else:
+                st.session_state["confirm_solic_action"] = {
+                    "assunto_solic": assunto_solic,
+                    "prazo_om": st.session_state.get("sol_prazo_om"),
+                    "selecionadas": selecionadas,
+                    "nr_doc_solicitado": nr_doc_solicitado,
+                    "selected_label": st.session_state.get("sol_doc_select"),
+                    "selected_doc_id": st.session_state.get("selected_doc_id"),
+                }
+
+        if st.session_state.get("confirm_solic_action"):
+            st.warning("Confirma **SALVAR** esta Solicitação?")
+            cx1, cx2 = st.columns([0.25, 0.25], gap="small")
+            with cx1:
+                if st.button("Confirmar", type="primary", key="btn_confirm_solic"):
+                    payload = st.session_state["confirm_solic_action"]
+                    try:
+                        selected_label = payload["selected_label"] or "00 | Nova Solicitação sem Documento"
+                        sel_id = payload["selected_doc_id"]
+
+                        # Nova solicitação sem documento
+                        if selected_label.startswith("00 | Nova") or sel_id is None:
+                            sel_id = insert_solicitacao_sem_documento(
+                                assunto_solic=payload["assunto_solic"],
+                                prazo_om=payload["prazo_om"],
+                                nr_doc_solicitado=payload["nr_doc_solicitado"]
+                            )
+                            st.session_state["selected_doc_id"] = sel_id
+
+                            # agora SEM "00 |"
+                            st.session_state["sol_doc_select"] = (
+                                f"{payload['assunto_solic']} | {payload['nr_doc_solicitado']} (ID {sel_id})"
+                            )
+                            _load_selected_document_into_forms()
+
+                        salvar_ou_atualizar_solicitacao(
+                            caso_id=sel_id,
+                            assunto_solic=payload["assunto_solic"],
+                            prazo_om=payload["prazo_om"],
+                            selecionadas=payload["selecionadas"],
+                            nr_doc_solicitado=payload["nr_doc_solicitado"]
+                        )
+
+                        st.session_state.pop("confirm_solic_action", None)
+                        st.toast("Solicitação salva ✅")
+                        _clear_forms()
+                        st.success("Solicitação cadastrada ✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state.pop("confirm_solic_action", None)
+                        st.error(f"Erro ao salvar solicitação: {e}")
+
+            with cx2:
+                if st.button("Cancelar", key="btn_cancel_solic"):
+                    st.session_state.pop("confirm_solic_action", None)
+                    st.info("Ação cancelada. (Campos mantidos)")
+
+
+# =========================================================
+# ABA ACOMPANHAMENTO
+# =========================================================
+with abas[1]:
+    st.markdown("""
+    <style>
+    .btn-del button { background:#dc2626 !important; color:#fff !important; border:1px solid #b91c1c !important; }
+    .btn-del button:hover { background:#b91c1c !important; border-color:#991b1b !important; }
+    .align-btn { padding-top: 28px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    df = fetch_casos()
+    arquivados_ids = fetch_arquivados_ids()
+
+    if not df.empty:
+        df = df[~df["id"].astype(int).isin(arquivados_ids)]
+
+    if df.empty:
+        st.subheader("Acompanhamento")
+        st.info("Nenhum documento no acompanhamento.")
+    else:
+        pend = fetch_pendencias()
+        df = df.merge(pend, how="left", left_on="id", right_on="caso_id")
+        df["qtd"] = df["qtd"].fillna(0).astype(int)
+
+        df_show = pd.DataFrame({
+            "id": df["id"],
+            "Nr Doc (Recebido)": df["nr_doc_recebido"].fillna("-"),
+            "Assunto (Documento)": df["assunto_doc"].fillna("-"),
+            "Assunto (Solicitação)": df["assunto_solic"].fillna("-"),
+            "Origem": df["origem"].fillna("-"),
+            "Prazo Final": pd.to_datetime(df["prazo_final"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+            "Prazo OM": pd.to_datetime(df["prazo_om"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+            "Nr Doc (Solicitado)": df["nr_doc_solicitado"].fillna("-"),
+            "Nr Doc (Resposta)": df.get("nr_doc_resposta").fillna("-"),
+            "Status": df["status"].fillna("-"),
+            "Pendências (Qtd)": df["qtd"],
+        })
+
+        tcol, b2 = st.columns([1, 0.18], gap="small")
+        with tcol:
+            st.subheader("Acompanhamento")
+        with b2:
+            st.markdown('<div class="btn-del">', unsafe_allow_html=True)
+            btn_arquivar = st.button("Arquivar", key="btn_arquivar")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        df_styled = df_show.style.apply(_row_style_acompanhamento, axis=1)
+
+        sel = st.dataframe(
+            df_styled,
+            use_container_width=True,
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_acomp"
+        )
+
+        selected_id = None
+        if sel and sel.get("selection", {}).get("rows"):
+            idx = sel["selection"]["rows"][0]
+            selected_id = int(df_show.iloc[idx]["id"])
+
+        if btn_arquivar:
+            if not selected_id:
+                st.warning("Selecione um documento na tabela.")
+            else:
+                st.session_state["confirma_arquivar"] = selected_id
+
+        if st.session_state.get("confirma_arquivar"):
+            st.warning("Confirma arquivar este documento? Ele sairá do Acompanhamento e irá para Arquivados.")
+            c1, c2 = st.columns([0.2, 0.2], gap="small")
+            with c1:
+                if st.button("Confirmar", type="primary", key="btn_confirmar_arquivar"):
+                    archive_caso(st.session_state["confirma_arquivar"])
+                    st.session_state.pop("confirma_arquivar", None)
+                    st.toast("Documento arquivado ✅")
+                    st.rerun()
+            with c2:
+                if st.button("Cancelar", key="btn_cancelar_arquivar"):
+                    st.session_state.pop("confirma_arquivar", None)
+                    st.info("Arquivamento cancelado.")
+
+        if selected_id:
+            st.markdown("---")
+            r_title, r_input, r_btn = st.columns([0.25, 0.45, 0.15], gap="small")
+            with r_title:
+                st.subheader("Resposta")
+            with r_input:
+                st.text_input("Nr Doc (Resposta)", key="nr_doc_resposta_input")
+            with r_btn:
+                st.markdown("<div class='align-btn'></div>", unsafe_allow_html=True)
+                btn_salvar_resp = st.button("Salvar", key="btn_salvar_resposta")
+
+            if btn_salvar_resp:
+                nr = (st.session_state.get("nr_doc_resposta_input") or "").strip()
+                set_resposta_e_status(selected_id, nr)
+                st.toast("Atualizado ✅")
+                st.rerun()
+
+        if selected_id:
+            caso_id = selected_id
+            caso = fetch_caso(caso_id)
+
+            nr_doc = caso.get("nr_doc_recebido") or "-"
+            assunto_doc = caso.get("assunto_doc") or "-"
+            origem = caso.get("origem") or "-"
+            prazo_final_txt = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_final"))
+
+            assunto_solic = caso.get("assunto_solic") or "-"
+            nr_doc_solic = caso.get("nr_doc_solicitado") or "-"
+            prazo_om_txt = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
+
+            prazo_final_phrase, pf_atraso = _days_phrase(caso.get("prazo_final"))
+            prazo_om_phrase, po_atraso = _days_phrase(caso.get("prazo_om"))
+
+            ret = fetch_retornos(caso_id)
+            pendentes = []
+            if not ret.empty:
+                pendentes = ret[ret["status"] != "Respondido"]["om"].tolist()
+
+            responsaveis_txt = "\n".join([f"{p}" for p in pendentes]) if pendentes else "(nenhum pendente)"
+
+            msg_padrao = (
+                "Senhores,\n\n"
+                "Solicito, por gentileza, o encaminhamento da resposta referente ao assunto abaixo:\n\n"
+                f"Assunto: {assunto_solic}\n"
+                f"Nr Doc: {nr_doc_solic}\n"
+                f"Prazo: {prazo_om_txt}\n\n"
+                "Responsáveis pendentes:\n"
+                f"{responsaveis_txt}\n\n"
+                "Atenciosamente."
+            )
+
+            st.divider()
+            st.subheader("Detalhes")
+
+            colA, colB, colC = st.columns([1, 1, 1], gap="large")
+
+            with colA:
+                st.markdown("##### Documento")
+                st.markdown(f"**Origem:** {origem}")
+                st.markdown(f"**Assunto:** {assunto_doc}")
+                st.markdown(f"**Nr Doc:** {nr_doc}")
+                st.markdown(f"**Prazo Final:** {prazo_final_txt}")
+                if prazo_final_phrase != "-":
+                    if pf_atraso:
+                        st.markdown(f"**<span style='color:#b00020'>{prazo_final_phrase}</span>**", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{prazo_final_phrase}**")
+
+            with colB:
+                st.markdown("##### Solicitação")
+                st.markdown(f"**Assunto Solicitado:** {assunto_solic}")
+                st.markdown(f"**Nr Doc:** {nr_doc_solic}")
+                st.markdown(f"**Prazo:** {prazo_om_txt}")
+                if prazo_om_phrase != "-":
+                    if po_atraso:
+                        st.markdown(f"**<span style='color:#b00020'>{prazo_om_phrase}</span>**", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{prazo_om_phrase}**")
+
+            with colC:
+                mtitle, mbtn = st.columns([1, 0.14], gap="small")
+                with mtitle:
+                    st.markdown("##### Mensagem")
+                with mbtn:
+                    copy_clicked = st.button("⧉", key=f"btn_copy_{caso_id}", help="Copiar a mensagem")
+
+                msg_key = f"msg_{caso_id}"
+                st.session_state.setdefault(msg_key, msg_padrao)
+
+                st.text_area(
+                    "",
+                    value=st.session_state[msg_key],
+                    height=170,
+                    key=msg_key,
+                    label_visibility="collapsed"
+                )
+
+                if copy_clicked:
+                    txt = st.session_state.get(msg_key, "") or ""
+                    txt_js = txt.replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
+                    components.html(
+                        f"""
+                        <script>
+                        async function copyText() {{
+                          try {{
+                            await navigator.clipboard.writeText(`{txt_js}`);
+                          }} catch (e) {{
+                            const ta = document.createElement("textarea");
+                            ta.value = `{txt_js}`;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand("copy");
+                            document.body.removeChild(ta);
+                          }}
+                        }}
+                        copyText();
+                        </script>
+                        """,
+                        height=0
+                    )
+                    st.success("Copiado ✅")
+
+            st.markdown("#### Retorno/Pendências")
+            if ret.empty:
+                st.success("Sem Responsáveis cadastrados.")
+            else:
+                ret = ret.reset_index(drop=True)
+                ret_table = pd.DataFrame({
+                    "Responsável": ret["om"],
+                    "Status": ret["status"],
+                    "Prazo": pd.to_datetime(ret["prazo_om"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+                    "Observações": ret["observacoes"].fillna(""),
+                })
+
+                sel_ret = st.dataframe(
+                    ret_table,
+                    use_container_width=True,
+                    hide_index=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key=f"ret_table_{caso_id}"
+                )
+
+                if sel_ret and sel_ret.get("selection", {}).get("rows"):
+                    ridx = sel_ret["selection"]["rows"][0]
+                    row = ret.iloc[ridx].to_dict()
+                    retorno_id = int(row["id"])
+
+                    st.divider()
+                    st.markdown("### Editar")
+
+                    col1, col2, col3, col4 = st.columns([1.4, 1.0, 2.6, 0.9], gap="small")
+                    with col1:
+                        st.text_input("Responsável", value=row.get("om") or "", disabled=True, key=f"ed_resp_{retorno_id}")
+                    with col2:
+                        novo_status = st.selectbox(
+                            "Status",
+                            RETORNO_STATUS,
+                            index=RETORNO_STATUS.index(row.get("status") or "Pendente"),
+                            key=f"ed_status_{retorno_id}"
+                        )
+                    with col3:
+                        nova_obs = st.text_input("Observações", value=(row.get("observacoes") or ""), key=f"ed_obs_{retorno_id}")
+                    with col4:
+                        st.markdown("<div class='align-btn'></div>", unsafe_allow_html=True)
+                        if st.button("Salvar", key=f"btn_save_ret_{retorno_id}"):
+                            payload_obs = (nova_obs or "").strip() or None
+                            conn = get_conn()
+                            cur = conn.cursor()
+                            cur.execute("""
+                                UPDATE retornos_om
+                                SET status = ?, observacoes = ?
+                                WHERE id = ?
+                            """, (novo_status, payload_obs, retorno_id))
+                            conn.commit()
+                            conn.close()
+                            st.toast("Atualizado ✅")
+                            st.rerun()
+
+
+# =========================================================
+# ABA ARQUIVADOS
+# =========================================================
+with abas[2]:
+    st.markdown("""
+    <style>
+    .btn-danger button { background:#dc2626 !important; color:#fff !important; border:1px solid #b91c1c !important; }
+    .btn-danger button:hover { background:#b91c1c !important; border-color:#991b1b !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    df_a = fetch_arquivados_casos()
+
+    if df_a.empty:
+        st.subheader("Arquivados")
+        st.info("Nenhum documento arquivado.")
+    else:
+        pend = fetch_pendencias()
+        df_a = df_a.merge(pend, how="left", left_on="id", right_on="caso_id")
+        df_a["qtd"] = df_a["qtd"].fillna(0).astype(int)
+
+        df_a_show = pd.DataFrame({
+            "id": df_a["id"],
+            "Nr Doc (Recebido)": df_a["nr_doc_recebido"].fillna("-"),
+            "Assunto (Documento)": df_a["assunto_doc"].fillna("-"),
+            "Assunto (Solicitação)": df_a["assunto_solic"].fillna("-"),
+            "Origem": df_a["origem"].fillna("-"),
+            "Prazo Final": pd.to_datetime(df_a["prazo_final"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+            "Prazo OM": pd.to_datetime(df_a["prazo_om"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+            "Nr Doc (Solicitado)": df_a["nr_doc_solicitado"].fillna("-"),
+            "Nr Doc (Resposta)": df_a.get("nr_doc_resposta").fillna("-"),
+            "Status": df_a["status"].fillna("-"),
+            "Pendências (Qtd)": df_a["qtd"],
+        })
+
+        h1, h2, h3 = st.columns([1, 0.18, 0.18], gap="small")
+        with h1:
+            st.subheader("Arquivados")
+        with h2:
+            btn_restaurar = st.button("Restaurar", key="btn_restaurar")
+        with h3:
+            st.markdown('<div class="btn-danger">', unsafe_allow_html=True)
+            btn_excluir = st.button("Excluir", key="btn_excluir_arq")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        sel_arq = st.dataframe(
+            df_a_show,
+            use_container_width=True,
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_arq"
+        )
+
+        selected_id = None
+        if sel_arq and sel_arq.get("selection", {}).get("rows"):
+            idx = sel_arq["selection"]["rows"][0]
+            selected_id = int(df_a_show.iloc[idx]["id"])
+
+        if btn_restaurar:
+            if not selected_id:
+                st.warning("Selecione um documento na tabela.")
+            else:
+                st.session_state["confirma_restaurar"] = selected_id
+
+        if st.session_state.get("confirma_restaurar"):
+            st.warning("Confirma restaurar este documento para o Acompanhamento?")
+            c1, c2 = st.columns([0.2, 0.2], gap="small")
+            with c1:
+                if st.button("Confirmar", type="primary", key="btn_confirmar_restaurar"):
+                    unarchive_caso(st.session_state["confirma_restaurar"])
+                    st.session_state.pop("confirma_restaurar", None)
+                    st.toast("Documento restaurado ✅")
+                    st.rerun()
+            with c2:
+                if st.button("Cancelar", key="btn_cancelar_restaurar"):
+                    st.session_state.pop("confirma_restaurar", None)
+                    st.info("Restauração cancelada.")
+
+        if btn_excluir:
+            if not selected_id:
+                st.warning("Selecione um documento na tabela.")
+            else:
+                st.session_state["confirma_excluir_arq"] = selected_id
+
+        if st.session_state.get("confirma_excluir_arq"):
+            st.warning("Confirma EXCLUIR este documento do banco de dados? Essa ação não pode ser desfeita.")
+            c1, c2 = st.columns([0.2, 0.2], gap="small")
+            with c1:
+                if st.button("Confirmar", type="primary", key="btn_confirmar_excluir_arq"):
+                    delete_caso(st.session_state["confirma_excluir_arq"])
+                    st.session_state.pop("confirma_excluir_arq", None)
+                    st.toast("Documento excluído ✅")
+                    st.rerun()
+            with c2:
+                if st.button("Cancelar", key="btn_cancelar_excluir_arq"):
+                    st.session_state.pop("confirma_excluir_arq", None)
+                    st.info("Exclusão cancelada.")
+
+        if selected_id:
+            st.divider()
+            st.subheader("Detalhes")
+
+            caso = fetch_caso(selected_id)
+            ret = fetch_retornos(selected_id)
+            responsaveis_relacionados = ret["om"].tolist() if not ret.empty else []
+
+            col1, col2, col3 = st.columns([1, 1, 1], gap="large")
+
+            with col1:
+                st.markdown("##### Documento recebido")
+                st.markdown(f"**Origem:** {caso.get('origem') or '-'}")
+                st.markdown(f"**Assunto:** {caso.get('assunto_doc') or '-'}")
+                st.markdown(f"**Nr Doc:** {caso.get('nr_doc_recebido') or '-'}")
+                st.markdown(f"**Prazo Final:** {_fmt_date_iso_to_ddmmyyyy(caso.get('prazo_final'))}")
+                pf_txt = _answered_on_time_text(caso.get("prazo_final"), caso.get("resolved_at"))
+                st.markdown(f"**Resultado:** {pf_txt}")
+
+            with col2:
+                st.markdown("##### Documento solicitação")
+                st.markdown(f"**Assunto Solicitado:** {caso.get('assunto_solic') or '-'}")
+                st.markdown(f"**Nr Doc:** {caso.get('nr_doc_solicitado') or '-'}")
+                st.markdown(f"**Prazo:** {_fmt_date_iso_to_ddmmyyyy(caso.get('prazo_om'))}")
+                po_txt = _answered_on_time_text(caso.get("prazo_om"), caso.get("resolved_at"))
+                st.markdown(f"**Resultado:** {po_txt}")
+
+            with col3:
+                st.markdown("##### Documento resposta")
+                st.markdown(f"**Nr Doc (Resposta):** {caso.get('nr_doc_resposta') or '-'}")
+                st.markdown(f"**Status:** {caso.get('status') or '-'}")
+                st.markdown(f"**Data de resolução:** {_fmt_date_iso_to_ddmmyyyy(caso.get('resolved_at'))}")
+
+            st.markdown("##### Responsáveis relacionados")
+            if responsaveis_relacionados:
+                st.markdown("\n".join([f"- {x}" for x in responsaveis_relacionados]))
+            else:
+                st.info("Nenhum responsável relacionado neste documento.")
