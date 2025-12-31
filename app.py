@@ -6,12 +6,17 @@ import streamlit as st
 import streamlit.components.v1 as components
 from supabase import create_client, Client
 
-
 RETORNO_STATUS = ["Pendente", "Respondido"]
 
 
 # =========================================================
-# Supabase client (com sessão do usuário)
+# CONFIG (set_page_config só pode ser chamado 1 vez)
+# =========================================================
+st.set_page_config(layout="wide")
+
+
+# =========================================================
+# Supabase client (Auth + PostgREST)
 # =========================================================
 @st.cache_resource
 def get_supabase() -> Client:
@@ -24,24 +29,34 @@ def get_session_access_token() -> str | None:
     sess = st.session_state.get("sb_session")
     if not sess:
         return None
-    # supabase-py retorna session com access_token
     return getattr(sess, "access_token", None)
 
 
-def sb_auth_headers() -> dict:
+def _sb_table(name: str):
+    """
+    Retorna a tabela Supabase já autenticada com o token do usuário logado.
+
+    Importante:
+    - NÃO usa .headers() (não existe em algumas versões do supabase-py).
+    - Usa sb.postgrest.auth(token) para fazer as queries respeitarem RLS do usuário.
+    """
+    sb = get_supabase()
     token = get_session_access_token()
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    if token:
+        sb.postgrest.auth(token)
+    return sb.table(name)
 
 
+# =========================================================
+# Auth UI (Login / Signup / Logout)
+# =========================================================
 def require_auth():
     st.session_state.setdefault("sb_session", None)
     st.session_state.setdefault("sb_user", None)
 
-    # Já logado
     if st.session_state["sb_session"] and st.session_state["sb_user"]:
         return
 
-    st.set_page_config(layout="centered")
     st.title("🔐 Controle de Documentos — Login")
 
     tabs = st.tabs(["Entrar", "Criar conta"])
@@ -49,7 +64,7 @@ def require_auth():
 
     with tabs[0]:
         with st.form("login_form"):
-            email = st.text_input("Email")
+            email = st.text_input("Email", placeholder="seuemail@exemplo.com")
             password = st.text_input("Senha", type="password")
             ok = st.form_submit_button("Entrar", type="primary")
 
@@ -64,7 +79,7 @@ def require_auth():
 
     with tabs[1]:
         with st.form("signup_form"):
-            email = st.text_input("Email ", key="signup_email")
+            email = st.text_input("Email ", key="signup_email", placeholder="seuemail@exemplo.com")
             password = st.text_input("Senha ", type="password", key="signup_pw")
             ok = st.form_submit_button("Criar conta", type="primary")
 
@@ -73,7 +88,7 @@ def require_auth():
                 sb.auth.sign_up({"email": email, "password": password})
                 st.success("Conta criada. Agora faça login na aba 'Entrar'.")
             except Exception:
-                st.error("Não foi possível criar a conta. Tente outro email ou senha mais forte.")
+                st.error("Não foi possível criar a conta. Tente outro email ou uma senha mais forte.")
 
     st.stop()
 
@@ -95,17 +110,11 @@ def sidebar_session_controls():
 
 
 # =========================================================
-# DB helpers via Supabase (respeita RLS)
+# CRUD via Supabase (RLS por usuário)
 # =========================================================
-def _sb_table(name: str):
-    sb = get_supabase()
-    return sb.table(name).headers(sb_auth_headers())
-
-
 def fetch_casos() -> pd.DataFrame:
     res = _sb_table("casos").select("*").order("id", desc=True).execute()
-    data = res.data or []
-    return pd.DataFrame(data)
+    return pd.DataFrame(res.data or [])
 
 
 def fetch_caso(caso_id: int) -> dict | None:
@@ -173,14 +182,16 @@ def fetch_retornos(caso_id: int) -> pd.DataFrame:
 
 
 def fetch_pendencias() -> pd.DataFrame:
-    # Supabase não tem GROUP BY fácil no client; vamos calcular em pandas
-    df = _sb_table("retornos_om").select("caso_id,status").execute().data or []
-    if not df:
+    # calcula via pandas para evitar depender de rpc/view
+    res = _sb_table("retornos_om").select("caso_id,status").execute()
+    data = res.data or []
+    if not data:
         return pd.DataFrame(columns=["caso_id", "qtd"])
-    dff = pd.DataFrame(df)
+    dff = pd.DataFrame(data)
     dff = dff[dff["status"] == "Pendente"]
-    out = dff.groupby("caso_id").size().reset_index(name="qtd")
-    return out
+    if dff.empty:
+        return pd.DataFrame(columns=["caso_id", "qtd"])
+    return dff.groupby("caso_id").size().reset_index(name="qtd")
 
 
 def delete_caso(caso_id: int):
@@ -201,7 +212,6 @@ def set_resposta_e_status(caso_id: int, nr_doc_resposta: str | None):
 def archive_caso(caso_id: int):
     user = st.session_state["sb_user"]
     payload = {"owner_id": user.id, "caso_id": caso_id, "archived_at": datetime.now().isoformat()}
-    # "upsert" pelo unique(caso_id)
     _sb_table("arquivados").upsert(payload, on_conflict="caso_id").execute()
 
 
@@ -216,7 +226,6 @@ def fetch_arquivados_ids() -> set[int]:
 
 
 def fetch_arquivados_casos() -> pd.DataFrame:
-    # join via 2 consultas (simples)
     ids = fetch_arquivados_ids()
     if not ids:
         return pd.DataFrame()
@@ -242,11 +251,11 @@ def add_master_om(nome: str):
     nome = _normalize_name(nome)
     if not nome:
         return False, "Informe o nome do Responsável."
+
     user = st.session_state["sb_user"]
 
-    # evita duplicado (case-insensitive)
-    res = _sb_table("master_oms").select("id,nome").execute()
-    exists = any((x["nome"] or "").strip().lower() == nome.lower() for x in (res.data or []))
+    res = _sb_table("master_oms").select("nome").execute()
+    exists = any((x.get("nome") or "").strip().lower() == nome.lower() for x in (res.data or []))
     if exists:
         return False, "Esse Responsável já existe."
 
@@ -260,8 +269,8 @@ def delete_master_oms(nomes: list[str]):
     if not nomes:
         return True, "Nada para remover."
     for n in nomes:
-        _sb_table("master_oms").delete().ilike("nome", n).execute()
-        _sb_table("retornos_om").delete().ilike("om", n).execute()
+        _sb_table("master_oms").delete().eq("nome", n).execute()
+        _sb_table("retornos_om").delete().eq("om", n).execute()
     return True, "Responsáveis removidos ✅"
 
 
@@ -273,7 +282,6 @@ def salvar_ou_atualizar_solicitacao(
     selecionadas: list[str],
     nr_doc_solicitado: str | None
 ):
-    # atualiza caso
     payload = {
         "assunto_solic": (assunto_solic or "").strip() or None,
         "prazo_om": prazo_om.isoformat() if prazo_om else None,
@@ -282,7 +290,6 @@ def salvar_ou_atualizar_solicitacao(
     }
     _sb_table("casos").update(payload).eq("id", caso_id).execute()
 
-    # carrega retornos existentes
     ret = fetch_retornos(caso_id)
     existentes = set(ret["om"].tolist()) if not ret.empty else set()
     selecionadas_set = set(selecionadas)
@@ -333,6 +340,9 @@ def _parse_ddmmyyyy_to_date(s: str):
         return None
 
 
+# - vermelho: prazo final hoje OU em atraso
+# - amarelo: prazo final com 5 dias para o prazo (inclui 5..1) exceto hoje/atraso
+# - verde: linha se status == Resolvido
 def _row_style_acompanhamento(row):
     status = str(row.get("Status", "")).strip().lower()
     if status == "resolvido":
@@ -454,7 +464,6 @@ def _load_selected_document_into_forms():
 # APP
 # =========================================================
 require_auth()
-st.set_page_config(layout="wide")
 sidebar_session_controls()
 
 dias = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
