@@ -269,7 +269,6 @@ def fetch_retornos(caso_id: int) -> pd.DataFrame:
 
 
 def fetch_pendencias() -> pd.DataFrame:
-    # calcula via pandas para evitar depender de rpc/view
     res = _sb_table("retornos_om").select("caso_id,status").execute()
     data = res.data or []
     if not data:
@@ -381,19 +380,16 @@ def salvar_ou_atualizar_solicitacao(
     existentes = set(ret["om"].tolist()) if not ret.empty else set()
     selecionadas_set = set(selecionadas)
 
-    # remove os que saíram
     for om in list(existentes - selecionadas_set):
         _sb_table("retornos_om").delete().eq("caso_id", caso_id).eq("om", om).execute()
 
     user = st.session_state["sb_user"]
 
-    # atualiza os que ficaram
     for om in list(existentes & selecionadas_set):
         _sb_table("retornos_om").update(
             {"prazo_om": prazo_om.isoformat() if prazo_om else None}
         ).eq("caso_id", caso_id).eq("om", om).execute()
 
-    # insere novos
     for om in list(selecionadas_set - existentes):
         _sb_table("retornos_om").insert(
             {
@@ -408,7 +404,7 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
-# ======== NOVO: update rápido de retorno (checkbox + obs inline) ========
+# ======== update rápido retorno (checkbox pendente + obs inline) ========
 def update_retorno_status_obs(retorno_id: int, status: str, observacoes: str | None):
     payload = {
         "status": status,
@@ -438,9 +434,6 @@ def _parse_ddmmyyyy_to_date(s: str):
         return None
 
 
-# - vermelho: prazo final hoje OU em atraso
-# - amarelo: prazo final com 5 dias para o prazo (inclui 5..1) exceto hoje/atraso
-# - verde: linha se status == Resolvido
 def _row_style_acompanhamento(row):
     status = str(row.get("Status", "")).strip().lower()
     if status == "resolvido":
@@ -570,26 +563,32 @@ def _status_badge(status: str | None) -> str:
     return f'<span class="badge {cls}">● <b>{status or "-"}</b></span>'
 
 
-# ======== NOVO: gerar mensagem de cobrança (WhatsApp) ========
+# ======== Mensagem (predefinida, cordial e leve) ========
 def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
-    assunto_solic = caso.get("assunto_solic") or "-"
-    nr_doc_solic = caso.get("nr_doc_solicitado") or "-"
-    prazo_om_txt = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
+    assunto = caso.get("assunto_solic") or "-"
+    nr = caso.get("nr_doc_solicitado") or "-"
+    prazo = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
 
     pendentes = []
     if ret is not None and not ret.empty:
         pendentes = ret[ret["status"].fillna("").str.lower() != "respondido"]["om"].fillna("").tolist()
 
-    responsaveis_txt = "\n".join([f"- {p}" for p in pendentes]) if pendentes else "(nenhum pendente)"
+    if pendentes:
+        lista = "\n".join([f"- {p}" for p in pendentes])
+        bloco_pend = f"Responsáveis pendentes:\n{lista}\n"
+        fechamento = "Agradeço desde já pelo apoio.\n"
+    else:
+        bloco_pend = "No momento, não constam pendências.\n"
+        fechamento = "Agradeço pelo pronto atendimento.\n"
 
     return (
         "Senhores,\n\n"
-        "Solicito, por gentileza, o encaminhamento da resposta referente ao assunto abaixo:\n\n"
-        f"Assunto: {assunto_solic}\n"
-        f"Nr Doc: {nr_doc_solic}\n"
-        f"Prazo: {prazo_om_txt}\n\n"
-        "Responsáveis pendentes:\n"
-        f"{responsaveis_txt}\n"
+        "Gentileza verificar a situação do retorno referente ao item abaixo:\n\n"
+        f"Assunto: {assunto}\n"
+        f"Nr Doc: {nr}\n"
+        f"Prazo: {prazo}\n\n"
+        f"{bloco_pend}\n"
+        f"{fechamento}"
     )
 
 
@@ -599,7 +598,6 @@ def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
 require_auth()
 page = sidebar_layout()
 
-# session defaults
 st.session_state.setdefault("sol_responsaveis", [])
 st.session_state.setdefault("doc_disabled", False)
 st.session_state.setdefault("sol_doc_select", "00 | Nova Solicitação sem Documento")
@@ -748,96 +746,121 @@ if page == "📋 Dashboard":
                     st.toast("Atualizado ✅")
                     st.rerun()
 
-            # ======= NOVO: Mensagem para cobrança + copiar =======
-            st.markdown("##### Mensagem para cobrança (WhatsApp)")
-            msg_key = f"dash_msg_{selected_id}"
-            st.session_state.setdefault(msg_key, "")
-
-            msg_default = build_msg_cobranca(caso, ret)
-
-            m1, m2 = st.columns([0.85, 0.15], gap="small")
-            with m1:
-                st.text_area("Mensagem", value=(st.session_state.get(msg_key) or msg_default), height=170, key=msg_key)
-            with m2:
-                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-
-                if st.button("Gerar Mensagem", type="primary", key=f"btn_gerar_msg_{selected_id}"):
-                    st.session_state[msg_key] = msg_default
-                    st.toast("Mensagem gerada ✅")
-                    st.rerun()
-
-                if st.button("⧉ Copiar", key=f"btn_copy_msg_{selected_id}"):
-                    txt = st.session_state.get(msg_key, "") or msg_default
-                    txt_js = txt.replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
-                    components.html(
-                        f"""
-                        <script>
-                        async function copyText() {{
-                          try {{
-                            await navigator.clipboard.writeText(`{txt_js}`);
-                          }} catch (e) {{
-                            const ta = document.createElement("textarea");
-                            ta.value = `{txt_js}`;
-                            document.body.appendChild(ta);
-                            ta.select();
-                            document.execCommand("copy");
-                            document.body.removeChild(ta);
-                          }}
-                        }}
-                        copyText();
-                        </script>
-                        """,
-                        height=0
+            # ======= MENSAGEM (limpa, em expander tipo "Gerenciar responsáveis") =======
+            with st.expander("Mensagem", expanded=False):
+                msg = build_msg_cobranca(caso, ret)
+                m1, m2 = st.columns([1, 0.10], gap="small")
+                with m1:
+                    st.text_area(
+                        "Mensagem",
+                        value=msg,
+                        height=170,
+                        label_visibility="collapsed",
+                        disabled=True,
+                        key=f"msg_view_{selected_id}",
                     )
-                    st.success("Copiado ✅")
+                with m2:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("⧉", key=f"btn_copy_msg_{selected_id}", help="Copiar"):
+                        txt_js = msg.replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
+                        components.html(
+                            f"""
+                            <script>
+                            async function copyText() {{
+                              try {{
+                                await navigator.clipboard.writeText(`{txt_js}`);
+                              }} catch (e) {{
+                                const ta = document.createElement("textarea");
+                                ta.value = `{txt_js}`;
+                                document.body.appendChild(ta);
+                                ta.select();
+                                document.execCommand("copy");
+                                document.body.removeChild(ta);
+                              }}
+                            }}
+                            copyText();
+                            </script>
+                            """,
+                            height=0
+                        )
+                        st.toast("Copiado ✅")
 
-            # ======= ALTERADO: Retornos/Pendências (checkbox + Obs inline; sem Prazo) =======
+            # ======= RETORNOS / PENDÊNCIAS (sem coluna ID, com checkbox Pendente) =======
             st.markdown("##### Retornos / Pendências")
 
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                base = pd.DataFrame({
-                    "id": ret["id"].astype(int),
+                # tabela base para comparar mudanças (inclui id somente para uso interno)
+                base_internal = pd.DataFrame({
+                    "_id": ret["id"].astype(int),
                     "Responsável": ret["om"].fillna(""),
-                    "Respondido": ret["status"].fillna("Pendente").str.lower().eq("respondido"),
+                    "Pendente": ret["status"].fillna("Pendente").str.lower().eq("pendente"),
                     "Obs": ret["observacoes"].fillna(""),
                 })
 
-                edited = st.data_editor(
-                    base,
+                # visão para usuário (sem id)
+                base_view = base_internal.drop(columns=["_id"])
+
+                edited_view = st.data_editor(
+                    base_view,
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["id", "Responsável"],
+                    disabled=["Responsável"],
                     column_config={
-                        "Respondido": st.column_config.CheckboxColumn("Respondido", help="Marcado = Respondido / Desmarcado = Pendente"),
-                        "Obs": st.column_config.TextColumn("Obs", help="Edite a observação direto aqui"),
+                        "Pendente": st.column_config.CheckboxColumn("Pendente", help="Marcado = Pendente / Desmarcado = Respondido"),
+                        "Obs": st.column_config.TextColumn("Obs"),
                     },
-                    key=f"ret_editor_{selected_id}",
+                    key=f"ret_editor_view_{selected_id}",
                 )
 
-                c_save, c_hint = st.columns([0.22, 0.78])
-                with c_save:
-                    if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_editor_{selected_id}"):
-                        b = base.set_index("id")
-                        n = edited.set_index("id")
+                # reconstrói com ids para aplicação
+                edited_internal = base_internal.copy()
+                edited_internal["Pendente"] = edited_view["Pendente"].astype(bool)
+                edited_internal["Obs"] = edited_view["Obs"].astype(str)
 
-                        changed_ids: list[int] = []
-                        for rid in n.index:
-                            if rid not in b.index:
-                                continue
-                            if bool(n.loc[rid, "Respondido"]) != bool(b.loc[rid, "Respondido"]) or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"]):
-                                changed_ids.append(int(rid))
+                # detecta alterações
+                b = base_internal.set_index("_id")
+                n = edited_internal.set_index("_id")
 
-                        for rid in changed_ids:
-                            new_status = "Respondido" if bool(n.loc[rid, "Respondido"]) else "Pendente"
-                            new_obs = (n.loc[rid, "Obs"] or "").strip() or None
-                            update_retorno_status_obs(rid, new_status, new_obs)
+                changed_ids: list[int] = []
+                for rid in n.index:
+                    if rid not in b.index:
+                        continue
+                    if bool(n.loc[rid, "Pendente"]) != bool(b.loc[rid, "Pendente"]) or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"]):
+                        changed_ids.append(int(rid))
 
-                        st.toast("Retornos atualizados ✅")
-                        st.rerun()
-                with c_hint:
-                    st.caption("Marque/desmarque e edite a Obs direto na tabela. Depois clique em **Salvar alterações**.")
+                # botão salvar -> pede confirmação
+                if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}", disabled=(len(changed_ids) == 0)):
+                    st.session_state["confirm_ret_save"] = {
+                        "selected_id": selected_id,
+                        "changed_ids": changed_ids,
+                        "snapshot": edited_internal.to_dict(orient="records"),
+                    }
+
+                if st.session_state.get("confirm_ret_save", {}).get("selected_id") == selected_id:
+                    payload = st.session_state["confirm_ret_save"]
+                    st.warning("Confirma salvar as alterações em Retornos/Pendências?")
+                    c_ok, c_cancel = st.columns([0.2, 0.2], gap="small")
+                    with c_ok:
+                        if st.button("Confirmar", type="primary", key=f"btn_confirm_ret_save_{selected_id}"):
+                            recs = payload.get("snapshot") or []
+                            # aplica somente os alterados
+                            for rid in payload.get("changed_ids", []):
+                                row = next((r for r in recs if int(r["_id"]) == int(rid)), None)
+                                if not row:
+                                    continue
+                                status = "Pendente" if bool(row.get("Pendente")) else "Respondido"
+                                obs = (row.get("Obs") or "").strip() or None
+                                update_retorno_status_obs(int(rid), status, obs)
+
+                            st.session_state.pop("confirm_ret_save", None)
+                            st.toast("Alterações salvas ✅")
+                            st.rerun()
+                    with c_cancel:
+                        if st.button("Cancelar", key=f"btn_cancel_ret_save_{selected_id}"):
+                            st.session_state.pop("confirm_ret_save", None)
+                            st.info("Ação cancelada.")
 
 
 # =========================================================
