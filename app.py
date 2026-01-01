@@ -14,13 +14,13 @@ RETORNO_STATUS = ["Pendente", "Respondido"]
 # =========================================================
 st.set_page_config(layout="wide")
 
-# Dashboard Modern CSS
+# Dashboard Modern CSS (fix emoji cutting + modern/dash)
 st.markdown(
     """
 <style>
 /* ---------- Base ---------- */
-.block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
-h1, h2, h3 { letter-spacing: -0.4px; }
+.block-container { padding-top: 1.6rem; padding-bottom: 2rem; max-width: 1400px; }
+h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.15rem; }
 .small-muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
 
 /* ---------- Sidebar ---------- */
@@ -408,6 +408,15 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
+# ======== NOVO: update rápido de retorno (checkbox + obs inline) ========
+def update_retorno_status_obs(retorno_id: int, status: str, observacoes: str | None):
+    payload = {
+        "status": status,
+        "observacoes": (observacoes or "").strip() or None
+    }
+    _sb_table("retornos_om").update(payload).eq("id", retorno_id).execute()
+
+
 # =========================================================
 # UI helpers
 # =========================================================
@@ -561,6 +570,29 @@ def _status_badge(status: str | None) -> str:
     return f'<span class="badge {cls}">● <b>{status or "-"}</b></span>'
 
 
+# ======== NOVO: gerar mensagem de cobrança (WhatsApp) ========
+def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
+    assunto_solic = caso.get("assunto_solic") or "-"
+    nr_doc_solic = caso.get("nr_doc_solicitado") or "-"
+    prazo_om_txt = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
+
+    pendentes = []
+    if ret is not None and not ret.empty:
+        pendentes = ret[ret["status"].fillna("").str.lower() != "respondido"]["om"].fillna("").tolist()
+
+    responsaveis_txt = "\n".join([f"- {p}" for p in pendentes]) if pendentes else "(nenhum pendente)"
+
+    return (
+        "Senhores,\n\n"
+        "Solicito, por gentileza, o encaminhamento da resposta referente ao assunto abaixo:\n\n"
+        f"Assunto: {assunto_solic}\n"
+        f"Nr Doc: {nr_doc_solic}\n"
+        f"Prazo: {prazo_om_txt}\n\n"
+        "Responsáveis pendentes:\n"
+        f"{responsaveis_txt}\n"
+    )
+
+
 # =========================================================
 # APP START
 # =========================================================
@@ -691,7 +723,7 @@ if page == "📋 Dashboard":
                 st.write("**Assunto:**", caso.get("assunto_doc") or "-")
                 st.write("**Origem:**", caso.get("origem") or "-")
                 st.write("**Prazo final:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_final")))
-                pf_phrase, pf_atraso = _days_phrase(caso.get("prazo_final"))
+                pf_phrase, _ = _days_phrase(caso.get("prazo_final"))
                 if pf_phrase != "-":
                     st.write("**Situação prazo:**", pf_phrase)
 
@@ -700,7 +732,7 @@ if page == "📋 Dashboard":
                 st.write("**Assunto:**", caso.get("assunto_solic") or "-")
                 st.write("**Nr solicitado:**", caso.get("nr_doc_solicitado") or "-")
                 st.write("**Prazo OM:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om")))
-                po_phrase, po_atraso = _days_phrase(caso.get("prazo_om"))
+                po_phrase, _ = _days_phrase(caso.get("prazo_om"))
                 if po_phrase != "-":
                     st.write("**Situação prazo:**", po_phrase)
 
@@ -716,19 +748,96 @@ if page == "📋 Dashboard":
                     st.toast("Atualizado ✅")
                     st.rerun()
 
+            # ======= NOVO: Mensagem para cobrança + copiar =======
+            st.markdown("##### Mensagem para cobrança (WhatsApp)")
+            msg_key = f"dash_msg_{selected_id}"
+            st.session_state.setdefault(msg_key, "")
+
+            msg_default = build_msg_cobranca(caso, ret)
+
+            m1, m2 = st.columns([0.85, 0.15], gap="small")
+            with m1:
+                st.text_area("Mensagem", value=(st.session_state.get(msg_key) or msg_default), height=170, key=msg_key)
+            with m2:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+
+                if st.button("Gerar Mensagem", type="primary", key=f"btn_gerar_msg_{selected_id}"):
+                    st.session_state[msg_key] = msg_default
+                    st.toast("Mensagem gerada ✅")
+                    st.rerun()
+
+                if st.button("⧉ Copiar", key=f"btn_copy_msg_{selected_id}"):
+                    txt = st.session_state.get(msg_key, "") or msg_default
+                    txt_js = txt.replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
+                    components.html(
+                        f"""
+                        <script>
+                        async function copyText() {{
+                          try {{
+                            await navigator.clipboard.writeText(`{txt_js}`);
+                          }} catch (e) {{
+                            const ta = document.createElement("textarea");
+                            ta.value = `{txt_js}`;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand("copy");
+                            document.body.removeChild(ta);
+                          }}
+                        }}
+                        copyText();
+                        </script>
+                        """,
+                        height=0
+                    )
+                    st.success("Copiado ✅")
+
+            # ======= ALTERADO: Retornos/Pendências (checkbox + Obs inline; sem Prazo) =======
             st.markdown("##### Retornos / Pendências")
+
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                ret_table = pd.DataFrame(
-                    {
-                        "Responsável": ret["om"],
-                        "Status": ret["status"],
-                        "Prazo": pd.to_datetime(ret["prazo_om"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
-                        "Obs": ret["observacoes"].fillna(""),
-                    }
+                base = pd.DataFrame({
+                    "id": ret["id"].astype(int),
+                    "Responsável": ret["om"].fillna(""),
+                    "Respondido": ret["status"].fillna("Pendente").str.lower().eq("respondido"),
+                    "Obs": ret["observacoes"].fillna(""),
+                })
+
+                edited = st.data_editor(
+                    base,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["id", "Responsável"],
+                    column_config={
+                        "Respondido": st.column_config.CheckboxColumn("Respondido", help="Marcado = Respondido / Desmarcado = Pendente"),
+                        "Obs": st.column_config.TextColumn("Obs", help="Edite a observação direto aqui"),
+                    },
+                    key=f"ret_editor_{selected_id}",
                 )
-                st.dataframe(ret_table, use_container_width=True, hide_index=True)
+
+                c_save, c_hint = st.columns([0.22, 0.78])
+                with c_save:
+                    if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_editor_{selected_id}"):
+                        b = base.set_index("id")
+                        n = edited.set_index("id")
+
+                        changed_ids: list[int] = []
+                        for rid in n.index:
+                            if rid not in b.index:
+                                continue
+                            if bool(n.loc[rid, "Respondido"]) != bool(b.loc[rid, "Respondido"]) or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"]):
+                                changed_ids.append(int(rid))
+
+                        for rid in changed_ids:
+                            new_status = "Respondido" if bool(n.loc[rid, "Respondido"]) else "Pendente"
+                            new_obs = (n.loc[rid, "Obs"] or "").strip() or None
+                            update_retorno_status_obs(rid, new_status, new_obs)
+
+                        st.toast("Retornos atualizados ✅")
+                        st.rerun()
+                with c_hint:
+                    st.caption("Marque/desmarque e edite a Obs direto na tabela. Depois clique em **Salvar alterações**.")
 
 
 # =========================================================
