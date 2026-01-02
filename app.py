@@ -54,13 +54,6 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; 
   border: 1px solid rgba(49,51,63,0.22);
 }
 
-/* Minimal copy button style */
-.copybtn > button{
-  padding: 0.50rem 0.70rem !important;
-  border-radius: 12px !important;
-  min-width: 54px !important;
-}
-
 /* ---------- Dataframe ---------- */
 div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   border: 1px solid rgba(49,51,63,0.10);
@@ -88,6 +81,15 @@ hr { border-color: rgba(49,51,63,0.10); }
 
 /* Separador vertical no Documento */
 .vline { height: 100%; border-left: 2px solid rgba(49,51,63,0.10); margin: 0 auto; }
+
+/* Container visual (cartão) */
+.card {
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 16px;
+  padding: 14px 14px;
+  background: rgba(255,255,255,0.70);
+  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.03);
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -169,7 +171,9 @@ def require_auth():
     st.stop()
 
 
-def sidebar_layout() -> str:
+def sidebar_layout() -> tuple[str, str]:
+    st.session_state.setdefault("dash_name", "Dashboard")
+
     with st.sidebar:
         st.markdown("## 📊 Controle de Documentos")
         st.markdown('<div class="small-muted">Dashboard operacional</div>', unsafe_allow_html=True)
@@ -179,12 +183,17 @@ def sidebar_layout() -> str:
             st.markdown(f"**👤 {user.email}**")
 
         st.markdown("---")
-
-        page = st.radio(
-            "Menu",
-            ["📋 Dashboard", "📄 Documento", "🗄️ Arquivados"],
-            index=0,
+        st.text_input(
+            "Nome do Dashboard",
+            key="dash_name",
+            help="Este nome aparecerá no menu e no título principal.",
         )
+        dash_title = (st.session_state.get("dash_name") or "Dashboard").strip() or "Dashboard"
+
+        st.markdown("---")
+
+        menu_options = [f"📋 {dash_title}", "📄 Documento", "🗄️ Arquivados"]
+        page = st.radio("Menu", menu_options, index=0)
 
         st.markdown("---")
         c1, c2 = st.columns(2)
@@ -202,7 +211,8 @@ def sidebar_layout() -> str:
                 st.rerun()
 
         st.caption("v1.0 • Streamlit + Supabase")
-    return page
+
+    return page, dash_title
 
 
 # =========================================================
@@ -395,9 +405,7 @@ def salvar_ou_atualizar_solicitacao(
     user = st.session_state["sb_user"]
 
     for om in list(existentes & selecionadas_set):
-        _sb_table("retornos_om").update(
-            {"prazo_om": prazo_om.isoformat() if prazo_om else None}
-        ).eq("caso_id", caso_id).eq("om", om).execute()
+        _sb_table("retornos_om").update({"prazo_om": prazo_om.isoformat() if prazo_om else None}).eq("caso_id", caso_id).eq("om", om).execute()
 
     for om in list(selecionadas_set - existentes):
         _sb_table("retornos_om").insert(
@@ -457,6 +465,15 @@ def _row_style_acompanhamento(row):
     if 1 <= diff <= 5:
         return ["background-color: #fef9c3; color: #713f12;"] * len(row)
 
+    return [""] * len(row)
+
+
+def _row_style_retornos(row):
+    s = str(row.get("Status", "")).strip().lower()
+    if s == "respondido":
+        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
+    if s == "pendente":
+        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
     return [""] * len(row)
 
 
@@ -568,7 +585,6 @@ def _status_badge(status: str | None) -> str:
     return f'<span class="badge {cls}">● <b>{status or "-"}</b></span>'
 
 
-# ======== Mensagem (predefinida, editável e copiada do que está na caixa) ========
 def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     assunto = caso.get("assunto_solic") or "-"
     nr = caso.get("nr_doc_solicitado") or "-"
@@ -594,7 +610,7 @@ def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
 # APP START
 # =========================================================
 require_auth()
-page = sidebar_layout()
+page, dash_title = sidebar_layout()
 
 st.session_state.setdefault("sol_responsaveis", [])
 st.session_state.setdefault("doc_disabled", False)
@@ -604,23 +620,19 @@ st.session_state.setdefault("sol_doc_select", "00 | Nova Solicitação sem Docum
 # =========================================================
 # PAGE: DASHBOARD
 # =========================================================
-if page == "📋 Dashboard":
+if page == f"📋 {dash_title}":
     hoje = date.today()
 
     df = fetch_casos()
     arq_ids = fetch_arquivados_ids()
     if not df.empty:
         df_acomp = df[~df["id"].astype(int).isin(arq_ids)].copy()
-        df_arq = df[df["id"].astype(int).isin(arq_ids)].copy()
     else:
         df_acomp = pd.DataFrame()
-        df_arq = pd.DataFrame()
 
-    # Pendências totais (retornos_om)
     pend = fetch_pendencias()
     pend_total = int(pend["qtd"].sum()) if not pend.empty else 0
 
-    # ATRASADOS = prazo_final <= hoje (inclui hoje) e não resolvido
     atrasados = 0
     if not df_acomp.empty and "prazo_final" in df_acomp.columns:
         prazos = pd.to_datetime(df_acomp["prazo_final"], errors="coerce").dt.date
@@ -628,7 +640,7 @@ if page == "📋 Dashboard":
         mask = prazos.notna() & (prazos <= hoje) & (status != "resolvido")
         atrasados = int(mask.sum())
 
-    st.title("📋 Dashboard")
+    st.title(f"📋 {dash_title}")
     st.markdown('<div class="small-muted">Visão geral, pendências e acompanhamento</div>', unsafe_allow_html=True)
 
     k1, k2, k3, k4 = st.columns(4)
@@ -716,166 +728,144 @@ if page == "📋 Dashboard":
             caso = fetch_caso(selected_id) or {}
             ret = fetch_retornos(selected_id)
 
-            st.divider()
-            st.subheader("Detalhes do item selecionado")
+            # -------- DETALHES (dentro de caixa/expander igual Mensagem) --------
+            with st.expander("Detalhes", expanded=True):
+                st.markdown(_status_badge(caso.get("status")), unsafe_allow_html=True)
 
-            st.markdown(_status_badge(caso.get("status")), unsafe_allow_html=True)
+                cA, cB, cC = st.columns([1, 1, 1], gap="large")
+                with cA:
+                    st.markdown("##### Documento")
+                    st.write("**Nr:**", caso.get("nr_doc_recebido") or "-")
+                    st.write("**Assunto:**", caso.get("assunto_doc") or "-")
+                    st.write("**Origem:**", caso.get("origem") or "-")
+                    st.write("**Prazo final:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_final")))
+                    pf_phrase, _ = _days_phrase(caso.get("prazo_final"))
+                    if pf_phrase != "-":
+                        st.write("**Situação prazo:**", pf_phrase)
 
-            cA, cB, cC = st.columns([1, 1, 1], gap="large")
-            with cA:
-                st.markdown("##### Documento")
-                st.write("**Nr:**", caso.get("nr_doc_recebido") or "-")
-                st.write("**Assunto:**", caso.get("assunto_doc") or "-")
-                st.write("**Origem:**", caso.get("origem") or "-")
-                st.write("**Prazo final:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_final")))
-                pf_phrase, _ = _days_phrase(caso.get("prazo_final"))
-                if pf_phrase != "-":
-                    st.write("**Situação prazo:**", pf_phrase)
+                with cB:
+                    st.markdown("##### Solicitação")
+                    st.write("**Assunto:**", caso.get("assunto_solic") or "-")
+                    st.write("**Nr solicitado:**", caso.get("nr_doc_solicitado") or "-")
+                    st.write("**Prazo OM:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om")))
+                    po_phrase, _ = _days_phrase(caso.get("prazo_om"))
+                    if po_phrase != "-":
+                        st.write("**Situação prazo:**", po_phrase)
 
-            with cB:
-                st.markdown("##### Solicitação")
-                st.write("**Assunto:**", caso.get("assunto_solic") or "-")
-                st.write("**Nr solicitado:**", caso.get("nr_doc_solicitado") or "-")
-                st.write("**Prazo OM:**", _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om")))
-                po_phrase, _ = _days_phrase(caso.get("prazo_om"))
-                if po_phrase != "-":
-                    st.write("**Situação prazo:**", po_phrase)
+                with cC:
+                    st.markdown("##### Resposta")
+                    st.write("**Nr resposta:**", caso.get("nr_doc_resposta") or "-")
+                    st.write("**Resolvido em:**", _fmt_date_iso_to_ddmmyyyy(caso.get("resolved_at")))
 
-            with cC:
-                st.markdown("##### Resposta")
-                st.write("**Nr resposta:**", caso.get("nr_doc_resposta") or "-")
-                st.write("**Resolvido em:**", _fmt_date_iso_to_ddmmyyyy(caso.get("resolved_at")))
+                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    nr_input = st.text_input("Atualizar Nr Resposta", value="", key="dash_nr_resp")
+                    if st.button("Salvar resposta", key="dash_salvar_resp", type="primary"):
+                        set_resposta_e_status(selected_id, nr_input.strip())
+                        st.toast("Atualizado ✅")
+                        st.rerun()
 
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                nr_input = st.text_input("Atualizar Nr Resposta", value="", key="dash_nr_resp")
-                if st.button("Salvar resposta", key="dash_salvar_resp", type="primary"):
-                    set_resposta_e_status(selected_id, nr_input.strip())
-                    st.toast("Atualizado ✅")
-                    st.rerun()
-
-            # ======= MENSAGEM (editável + copiar pega o TEXTO ATUAL da caixa) =======
+            # -------- MENSAGEM (sem botão copiar; ocupa o espaço todo) --------
             with st.expander("Mensagem", expanded=False):
                 msg_key = f"msg_edit_{selected_id}"
                 st.session_state.setdefault(msg_key, build_msg_cobranca(caso, ret))
+                st.text_area(
+                    "Mensagem",
+                    key=msg_key,
+                    height=190,
+                    label_visibility="collapsed",
+                )
 
-                m1, m2 = st.columns([1, 0.14], gap="small")
-                with m1:
-                    st.text_area(
-                        "Mensagem",
-                        key=msg_key,
-                        height=180,
-                        label_visibility="collapsed",
-                    )
-
-                with m2:
-                    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-                    st.markdown('<div class="copybtn">', unsafe_allow_html=True)
-                    copy_clicked = st.button("⧉", key=f"btn_copy_msg_{selected_id}", help="Copiar mensagem")
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                    if copy_clicked:
-                        # copia o conteúdo ATUAL do textarea
-                        txt = (st.session_state.get(msg_key) or "").replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
-                        components.html(
-                            f"""
-                            <script>
-                            async function copyText() {{
-                              try {{
-                                await navigator.clipboard.writeText(`{txt}`);
-                              }} catch (e) {{
-                                const ta = document.createElement("textarea");
-                                ta.value = `{txt}`;
-                                document.body.appendChild(ta);
-                                ta.select();
-                                document.execCommand("copy");
-                                document.body.removeChild(ta);
-                              }}
-                            }}
-                            copyText();
-                            </script>
-                            """,
-                            height=0,
-                        )
-                        st.toast("Copiado ✅")
-
-            # ======= RETORNOS / PENDÊNCIAS (UMA TABELA, Status exclusivo) =======
+            # -------- RETORNOS / PENDÊNCIAS (1 tabela VISUAL colorida + edição em expander) --------
             st.markdown("##### Retornos / Pendências")
 
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                base_ids = ret["id"].astype(int).tolist()
-                base_status = ret["status"].fillna("Pendente").astype(str).str.strip().str.title().tolist()
-                base_obs = ret["observacoes"].fillna("").astype(str).tolist()
-
-                editor_df = pd.DataFrame({
-                    "Responsável": ret["om"].fillna("").astype(str).tolist(),
-                    "Status": [s if s in ["Pendente", "Respondido"] else "Pendente" for s in base_status],
-                    "Obs": base_obs,
+                # VISUAL (colorida)
+                view_df = pd.DataFrame({
+                    "Responsável": ret["om"].fillna("").astype(str),
+                    "Status": ret["status"].fillna("Pendente").astype(str).str.title(),
+                    "Obs": ret["observacoes"].fillna("").astype(str),
                 })
-
-                edited = st.data_editor(
-                    editor_df,
+                st.dataframe(
+                    view_df.style.apply(_row_style_retornos, axis=1),
                     use_container_width=True,
                     hide_index=True,
-                    disabled=["Responsável"],
-                    column_config={
-                        "Status": st.column_config.SelectboxColumn(
-                            "Status",
-                            options=["Pendente", "Respondido"],
-                            required=True,
-                        ),
-                        "Obs": st.column_config.TextColumn("Obs"),
-                    },
-                    key=f"ret_editor_single_{selected_id}",
                 )
 
-                # Detecta mudanças por índice de linha (alinhado com base_ids)
-                changed_idx: list[int] = []
-                for i in range(len(base_ids)):
-                    old_s = str(editor_df.loc[i, "Status"]).strip()
-                    new_s = str(edited.loc[i, "Status"]).strip()
-                    old_o = str(editor_df.loc[i, "Obs"] or "")
-                    new_o = str(edited.loc[i, "Obs"] or "")
-                    if old_s != new_s or old_o != new_o:
-                        changed_idx.append(i)
+                # EDIÇÃO (sem duplicar visualmente a tabela: fica dentro do expander)
+                with st.expander("Editar Retornos / Pendências", expanded=False):
+                    base_ids = ret["id"].astype(int).tolist()
+                    base_status = ret["status"].fillna("Pendente").astype(str).str.strip().str.title().tolist()
+                    base_obs = ret["observacoes"].fillna("").astype(str).tolist()
 
-                if st.button(
-                    "Salvar alterações",
-                    type="primary",
-                    key=f"btn_save_ret_{selected_id}",
-                    disabled=(len(changed_idx) == 0),
-                ):
-                    st.session_state["confirm_ret_save"] = {
-                        "selected_id": selected_id,
-                        "changed_idx": changed_idx,
-                        "base_ids": base_ids,
-                        "edited": edited.to_dict(orient="records"),
-                    }
+                    editor_df = pd.DataFrame({
+                        "Responsável": ret["om"].fillna("").astype(str).tolist(),
+                        "Status": [s if s in ["Pendente", "Respondido"] else "Pendente" for s in base_status],
+                        "Obs": base_obs,
+                    })
 
-                if st.session_state.get("confirm_ret_save", {}).get("selected_id") == selected_id:
-                    st.warning("Confirma salvar as alterações em Retornos/Pendências?")
-                    c_ok, c_cancel = st.columns([0.2, 0.2], gap="small")
-                    with c_ok:
-                        if st.button("Confirmar", type="primary", key=f"btn_confirm_ret_save_{selected_id}"):
-                            payload = st.session_state["confirm_ret_save"]
-                            recs = payload.get("edited") or []
-                            for i in payload.get("changed_idx", []):
-                                rid = int(payload["base_ids"][i])
-                                row = recs[i] if i < len(recs) else {}
-                                status = str(row.get("Status") or "Pendente").strip().title()
-                                if status not in ["Pendente", "Respondido"]:
-                                    status = "Pendente"
-                                obs = (str(row.get("Obs") or "").strip() or None)
-                                update_retorno_status_obs(rid, status, obs)
+                    edited = st.data_editor(
+                        editor_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=["Responsável"],
+                        column_config={
+                            "Status": st.column_config.SelectboxColumn(
+                                "Status",
+                                options=["Pendente", "Respondido"],
+                                required=True,
+                            ),
+                            "Obs": st.column_config.TextColumn("Obs"),
+                        },
+                        key=f"ret_editor_single_{selected_id}",
+                    )
 
-                            st.session_state.pop("confirm_ret_save", None)
-                            st.toast("Alterações salvas ✅")
-                            st.rerun()
-                    with c_cancel:
-                        if st.button("Cancelar", key=f"btn_cancel_ret_save_{selected_id}"):
-                            st.session_state.pop("confirm_ret_save", None)
-                            st.info("Ação cancelada.")
+                    changed_idx: list[int] = []
+                    for i in range(len(base_ids)):
+                        old_s = str(editor_df.loc[i, "Status"]).strip()
+                        new_s = str(edited.loc[i, "Status"]).strip()
+                        old_o = str(editor_df.loc[i, "Obs"] or "")
+                        new_o = str(edited.loc[i, "Obs"] or "")
+                        if old_s != new_s or old_o != new_o:
+                            changed_idx.append(i)
+
+                    if st.button(
+                        "Salvar alterações",
+                        type="primary",
+                        key=f"btn_save_ret_{selected_id}",
+                        disabled=(len(changed_idx) == 0),
+                    ):
+                        st.session_state["confirm_ret_save"] = {
+                            "selected_id": selected_id,
+                            "changed_idx": changed_idx,
+                            "base_ids": base_ids,
+                            "edited": edited.to_dict(orient="records"),
+                        }
+
+                    if st.session_state.get("confirm_ret_save", {}).get("selected_id") == selected_id:
+                        st.warning("Confirma salvar as alterações em Retornos/Pendências?")
+                        c_ok, c_cancel = st.columns([0.2, 0.2], gap="small")
+                        with c_ok:
+                            if st.button("Confirmar", type="primary", key=f"btn_confirm_ret_save_{selected_id}"):
+                                payload = st.session_state["confirm_ret_save"]
+                                recs = payload.get("edited") or []
+                                for i in payload.get("changed_idx", []):
+                                    rid = int(payload["base_ids"][i])
+                                    row = recs[i] if i < len(recs) else {}
+                                    status = str(row.get("Status") or "Pendente").strip().title()
+                                    if status not in ["Pendente", "Respondido"]:
+                                        status = "Pendente"
+                                    obs = (str(row.get("Obs") or "").strip() or None)
+                                    update_retorno_status_obs(rid, status, obs)
+
+                                st.session_state.pop("confirm_ret_save", None)
+                                st.toast("Alterações salvas ✅")
+                                st.rerun()
+                        with c_cancel:
+                            if st.button("Cancelar", key=f"btn_cancel_ret_save_{selected_id}"):
+                                st.session_state.pop("confirm_ret_save", None)
+                                st.info("Ação cancelada.")
 
 
 # =========================================================
@@ -1062,7 +1052,6 @@ elif page == "📄 Documento":
 
         oms = get_master_oms()
 
-        # ===== Barra organizada: Circular | Multiselect | Salvar =====
         bar1, bar2, bar3 = st.columns([0.20, 1, 0.30], gap="small")
 
         with bar1:
