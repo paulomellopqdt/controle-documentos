@@ -19,9 +19,12 @@ st.markdown(
     """
 <style>
 /* ---------- Base ---------- */
-.block-container { padding-top: 1.6rem; padding-bottom: 2rem; max-width: 1400px; }
-h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.15rem; }
+.block-container { padding-top: 1.9rem; padding-bottom: 2rem; max-width: 1400px; }
+h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.25rem; }
 .small-muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
+
+/* Prevent emoji clipping in titles */
+h1 span, h2 span, h3 span { display: inline-block; padding-top: 2px; }
 
 /* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] { border-right: 1px solid rgba(49,51,63,0.10); }
@@ -51,8 +54,15 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; 
   border: 1px solid rgba(49,51,63,0.22);
 }
 
+/* Minimal copy button style */
+.copybtn > button{
+  padding: 0.50rem 0.70rem !important;
+  border-radius: 12px !important;
+  min-width: 54px !important;
+}
+
 /* ---------- Dataframe ---------- */
-div[data-testid="stDataFrame"]{
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   border: 1px solid rgba(49,51,63,0.10);
   border-radius: 16px;
   overflow: hidden;
@@ -104,7 +114,6 @@ def get_session_access_token() -> str | None:
 def _sb_table(name: str):
     """
     Retorna a tabela Supabase já autenticada com o token do usuário logado.
-    (Sem usar .headers(), que não existe em algumas versões do supabase-py.)
     """
     sb = get_supabase()
     token = get_session_access_token()
@@ -404,12 +413,8 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
-# ======== update rápido retorno (checkbox pendente + obs inline) ========
 def update_retorno_status_obs(retorno_id: int, status: str, observacoes: str | None):
-    payload = {
-        "status": status,
-        "observacoes": (observacoes or "").strip() or None
-    }
+    payload = {"status": status, "observacoes": (observacoes or "").strip() or None}
     _sb_table("retornos_om").update(payload).eq("id", retorno_id).execute()
 
 
@@ -563,7 +568,7 @@ def _status_badge(status: str | None) -> str:
     return f'<span class="badge {cls}">● <b>{status or "-"}</b></span>'
 
 
-# ======== Mensagem (predefinida, cordial e leve) ========
+# ======== Mensagem (predefinida, editável e copiada do que está na caixa) ========
 def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     assunto = caso.get("assunto_solic") or "-"
     nr = caso.get("nr_doc_solicitado") or "-"
@@ -573,22 +578,15 @@ def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     if ret is not None and not ret.empty:
         pendentes = ret[ret["status"].fillna("").str.lower() != "respondido"]["om"].fillna("").tolist()
 
-    if pendentes:
-        lista = "\n".join([f"- {p}" for p in pendentes])
-        bloco_pend = f"Responsáveis pendentes:\n{lista}\n"
-        fechamento = "Agradeço desde já pelo apoio.\n"
-    else:
-        bloco_pend = "No momento, não constam pendências.\n"
-        fechamento = "Agradeço pelo pronto atendimento.\n"
-
+    pend_txt = "\n".join([f"- {p}" for p in pendentes]) if pendentes else "- (nenhum)"
     return (
-        "Senhores,\n\n"
-        "Gentileza verificar a situação do retorno referente ao item abaixo:\n\n"
-        f"Assunto: {assunto}\n"
-        f"Nr Doc: {nr}\n"
-        f"Prazo: {prazo}\n\n"
-        f"{bloco_pend}\n"
-        f"{fechamento}"
+        "🚨 Atenção!\n\n"
+        "Solicito verificar a situação do retorno referente à seguinte solicitação:\n\n"
+        f"📌 Assunto: {assunto}\n"
+        f"📄 Nr Doc: {nr}\n"
+        f"⏳ Prazo: {prazo}\n\n"
+        "👥 Pendentes:\n"
+        f"{pend_txt}\n"
     )
 
 
@@ -618,15 +616,24 @@ if page == "📋 Dashboard":
         df_acomp = pd.DataFrame()
         df_arq = pd.DataFrame()
 
+    # Pendências totais (retornos_om)
     pend = fetch_pendencias()
     pend_total = int(pend["qtd"].sum()) if not pend.empty else 0
+
+    # ATRASADOS = prazo_final <= hoje (inclui hoje) e não resolvido
+    atrasados = 0
+    if not df_acomp.empty and "prazo_final" in df_acomp.columns:
+        prazos = pd.to_datetime(df_acomp["prazo_final"], errors="coerce").dt.date
+        status = df_acomp.get("status", pd.Series([""] * len(df_acomp))).astype(str).str.lower()
+        mask = prazos.notna() & (prazos <= hoje) & (status != "resolvido")
+        atrasados = int(mask.sum())
 
     st.title("📋 Dashboard")
     st.markdown('<div class="small-muted">Visão geral, pendências e acompanhamento</div>', unsafe_allow_html=True)
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Em acompanhamento", 0 if df_acomp.empty else len(df_acomp))
-    k2.metric("Arquivados", 0 if df_arq.empty else len(df_arq))
+    k2.metric("Atrasados", atrasados)
     k3.metric("Pendências", pend_total)
     k4.metric("Hoje", hoje.strftime("%d/%m/%Y"))
     st.divider()
@@ -746,32 +753,37 @@ if page == "📋 Dashboard":
                     st.toast("Atualizado ✅")
                     st.rerun()
 
-            # ======= MENSAGEM (limpa, em expander tipo "Gerenciar responsáveis") =======
+            # ======= MENSAGEM (editável + copiar pega o TEXTO ATUAL da caixa) =======
             with st.expander("Mensagem", expanded=False):
-                msg = build_msg_cobranca(caso, ret)
-                m1, m2 = st.columns([1, 0.10], gap="small")
+                msg_key = f"msg_edit_{selected_id}"
+                st.session_state.setdefault(msg_key, build_msg_cobranca(caso, ret))
+
+                m1, m2 = st.columns([1, 0.14], gap="small")
                 with m1:
                     st.text_area(
                         "Mensagem",
-                        value=msg,
-                        height=170,
+                        key=msg_key,
+                        height=180,
                         label_visibility="collapsed",
-                        disabled=True,
-                        key=f"msg_view_{selected_id}",
                     )
+
                 with m2:
-                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                    if st.button("⧉", key=f"btn_copy_msg_{selected_id}", help="Copiar"):
-                        txt_js = msg.replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
+                    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+                    st.markdown('<div class="copybtn">', unsafe_allow_html=True)
+                    copy_clicked = st.button("⧉", key=f"btn_copy_msg_{selected_id}", help="Copiar mensagem")
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                    if copy_clicked:
+                        txt = (st.session_state.get(msg_key) or "").replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
                         components.html(
                             f"""
                             <script>
                             async function copyText() {{
                               try {{
-                                await navigator.clipboard.writeText(`{txt_js}`);
+                                await navigator.clipboard.writeText(`{txt}`);
                               }} catch (e) {{
                                 const ta = document.createElement("textarea");
-                                ta.value = `{txt_js}`;
+                                ta.value = `{txt}`;
                                 document.body.appendChild(ta);
                                 ta.select();
                                 document.execCommand("copy");
@@ -781,25 +793,25 @@ if page == "📋 Dashboard":
                             copyText();
                             </script>
                             """,
-                            height=0
+                            height=0,
                         )
                         st.toast("Copiado ✅")
 
-            # ======= RETORNOS / PENDÊNCIAS (sem coluna ID, com checkbox Pendente) =======
+            # ======= RETORNOS / PENDÊNCIAS (pendente + respondido) =======
             st.markdown("##### Retornos / Pendências")
 
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                # tabela base para comparar mudanças (inclui id somente para uso interno)
+                # status -> checkboxes
                 base_internal = pd.DataFrame({
                     "_id": ret["id"].astype(int),
                     "Responsável": ret["om"].fillna(""),
-                    "Pendente": ret["status"].fillna("Pendente").str.lower().eq("pendente"),
+                    "Pendente": ret["status"].fillna("Pendente").astype(str).str.lower().eq("pendente"),
+                    "Respondido": ret["status"].fillna("Pendente").astype(str).str.lower().eq("respondido"),
                     "Obs": ret["observacoes"].fillna(""),
                 })
 
-                # visão para usuário (sem id)
                 base_view = base_internal.drop(columns=["_id"])
 
                 edited_view = st.data_editor(
@@ -808,18 +820,49 @@ if page == "📋 Dashboard":
                     hide_index=True,
                     disabled=["Responsável"],
                     column_config={
-                        "Pendente": st.column_config.CheckboxColumn("Pendente", help="Marcado = Pendente / Desmarcado = Respondido"),
+                        "Pendente": st.column_config.CheckboxColumn("Pendente"),
+                        "Respondido": st.column_config.CheckboxColumn("Respondido"),
                         "Obs": st.column_config.TextColumn("Obs"),
                     },
                     key=f"ret_editor_view_{selected_id}",
                 )
 
-                # reconstrói com ids para aplicação
+                # normaliza: se ambos marcados -> Respondido; se nenhum -> Pendente
                 edited_internal = base_internal.copy()
                 edited_internal["Pendente"] = edited_view["Pendente"].astype(bool)
+                edited_internal["Respondido"] = edited_view["Respondido"].astype(bool)
                 edited_internal["Obs"] = edited_view["Obs"].astype(str)
 
-                # detecta alterações
+                for i in edited_internal.index:
+                    p = bool(edited_internal.at[i, "Pendente"])
+                    r = bool(edited_internal.at[i, "Respondido"])
+                    if p and r:
+                        edited_internal.at[i, "Pendente"] = False
+                        edited_internal.at[i, "Respondido"] = True
+                    elif (not p) and (not r):
+                        edited_internal.at[i, "Pendente"] = True
+                        edited_internal.at[i, "Respondido"] = False
+                    elif r:
+                        edited_internal.at[i, "Pendente"] = False
+                    elif p:
+                        edited_internal.at[i, "Respondido"] = False
+
+                # PREVIEW colorido (linha vermelha/verde)
+                def _row_style_ret(row):
+                    if bool(row.get("Respondido")):
+                        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
+                    if bool(row.get("Pendente")):
+                        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
+                    return [""] * len(row)
+
+                preview = edited_internal.drop(columns=["_id"]).copy()
+                st.dataframe(
+                    preview.style.apply(_row_style_ret, axis=1),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # detecta mudanças
                 b = base_internal.set_index("_id")
                 n = edited_internal.set_index("_id")
 
@@ -827,10 +870,13 @@ if page == "📋 Dashboard":
                 for rid in n.index:
                     if rid not in b.index:
                         continue
-                    if bool(n.loc[rid, "Pendente"]) != bool(b.loc[rid, "Pendente"]) or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"]):
+                    if (
+                        bool(n.loc[rid, "Pendente"]) != bool(b.loc[rid, "Pendente"])
+                        or bool(n.loc[rid, "Respondido"]) != bool(b.loc[rid, "Respondido"])
+                        or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"])
+                    ):
                         changed_ids.append(int(rid))
 
-                # botão salvar -> pede confirmação
                 if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}", disabled=(len(changed_ids) == 0)):
                     st.session_state["confirm_ret_save"] = {
                         "selected_id": selected_id,
@@ -845,12 +891,11 @@ if page == "📋 Dashboard":
                     with c_ok:
                         if st.button("Confirmar", type="primary", key=f"btn_confirm_ret_save_{selected_id}"):
                             recs = payload.get("snapshot") or []
-                            # aplica somente os alterados
                             for rid in payload.get("changed_ids", []):
                                 row = next((r for r in recs if int(r["_id"]) == int(rid)), None)
                                 if not row:
                                     continue
-                                status = "Pendente" if bool(row.get("Pendente")) else "Respondido"
+                                status = "Respondido" if bool(row.get("Respondido")) else "Pendente"
                                 obs = (row.get("Obs") or "").strip() or None
                                 update_retorno_status_obs(int(rid), status, obs)
 
