@@ -774,6 +774,7 @@ if page == "📋 Dashboard":
                     st.markdown("</div>", unsafe_allow_html=True)
 
                     if copy_clicked:
+                        # copia o conteúdo ATUAL do textarea
                         txt = (st.session_state.get(msg_key) or "").replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
                         components.html(
                             f"""
@@ -797,107 +798,76 @@ if page == "📋 Dashboard":
                         )
                         st.toast("Copiado ✅")
 
-            # ======= RETORNOS / PENDÊNCIAS (pendente + respondido) =======
+            # ======= RETORNOS / PENDÊNCIAS (UMA TABELA, Status exclusivo) =======
             st.markdown("##### Retornos / Pendências")
 
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                # status -> checkboxes
-                base_internal = pd.DataFrame({
-                    "_id": ret["id"].astype(int),
-                    "Responsável": ret["om"].fillna(""),
-                    "Pendente": ret["status"].fillna("Pendente").astype(str).str.lower().eq("pendente"),
-                    "Respondido": ret["status"].fillna("Pendente").astype(str).str.lower().eq("respondido"),
-                    "Obs": ret["observacoes"].fillna(""),
+                base_ids = ret["id"].astype(int).tolist()
+                base_status = ret["status"].fillna("Pendente").astype(str).str.strip().str.title().tolist()
+                base_obs = ret["observacoes"].fillna("").astype(str).tolist()
+
+                editor_df = pd.DataFrame({
+                    "Responsável": ret["om"].fillna("").astype(str).tolist(),
+                    "Status": [s if s in ["Pendente", "Respondido"] else "Pendente" for s in base_status],
+                    "Obs": base_obs,
                 })
 
-                base_view = base_internal.drop(columns=["_id"])
-
-                edited_view = st.data_editor(
-                    base_view,
+                edited = st.data_editor(
+                    editor_df,
                     use_container_width=True,
                     hide_index=True,
                     disabled=["Responsável"],
                     column_config={
-                        "Pendente": st.column_config.CheckboxColumn("Pendente"),
-                        "Respondido": st.column_config.CheckboxColumn("Respondido"),
+                        "Status": st.column_config.SelectboxColumn(
+                            "Status",
+                            options=["Pendente", "Respondido"],
+                            required=True,
+                        ),
                         "Obs": st.column_config.TextColumn("Obs"),
                     },
-                    key=f"ret_editor_view_{selected_id}",
+                    key=f"ret_editor_single_{selected_id}",
                 )
 
-                # normaliza: se ambos marcados -> Respondido; se nenhum -> Pendente
-                edited_internal = base_internal.copy()
-                edited_internal["Pendente"] = edited_view["Pendente"].astype(bool)
-                edited_internal["Respondido"] = edited_view["Respondido"].astype(bool)
-                edited_internal["Obs"] = edited_view["Obs"].astype(str)
+                # Detecta mudanças por índice de linha (alinhado com base_ids)
+                changed_idx: list[int] = []
+                for i in range(len(base_ids)):
+                    old_s = str(editor_df.loc[i, "Status"]).strip()
+                    new_s = str(edited.loc[i, "Status"]).strip()
+                    old_o = str(editor_df.loc[i, "Obs"] or "")
+                    new_o = str(edited.loc[i, "Obs"] or "")
+                    if old_s != new_s or old_o != new_o:
+                        changed_idx.append(i)
 
-                for i in edited_internal.index:
-                    p = bool(edited_internal.at[i, "Pendente"])
-                    r = bool(edited_internal.at[i, "Respondido"])
-                    if p and r:
-                        edited_internal.at[i, "Pendente"] = False
-                        edited_internal.at[i, "Respondido"] = True
-                    elif (not p) and (not r):
-                        edited_internal.at[i, "Pendente"] = True
-                        edited_internal.at[i, "Respondido"] = False
-                    elif r:
-                        edited_internal.at[i, "Pendente"] = False
-                    elif p:
-                        edited_internal.at[i, "Respondido"] = False
-
-                # PREVIEW colorido (linha vermelha/verde)
-                def _row_style_ret(row):
-                    if bool(row.get("Respondido")):
-                        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
-                    if bool(row.get("Pendente")):
-                        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
-                    return [""] * len(row)
-
-                preview = edited_internal.drop(columns=["_id"]).copy()
-                st.dataframe(
-                    preview.style.apply(_row_style_ret, axis=1),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-                # detecta mudanças
-                b = base_internal.set_index("_id")
-                n = edited_internal.set_index("_id")
-
-                changed_ids: list[int] = []
-                for rid in n.index:
-                    if rid not in b.index:
-                        continue
-                    if (
-                        bool(n.loc[rid, "Pendente"]) != bool(b.loc[rid, "Pendente"])
-                        or bool(n.loc[rid, "Respondido"]) != bool(b.loc[rid, "Respondido"])
-                        or str(n.loc[rid, "Obs"]) != str(b.loc[rid, "Obs"])
-                    ):
-                        changed_ids.append(int(rid))
-
-                if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}", disabled=(len(changed_ids) == 0)):
+                if st.button(
+                    "Salvar alterações",
+                    type="primary",
+                    key=f"btn_save_ret_{selected_id}",
+                    disabled=(len(changed_idx) == 0),
+                ):
                     st.session_state["confirm_ret_save"] = {
                         "selected_id": selected_id,
-                        "changed_ids": changed_ids,
-                        "snapshot": edited_internal.to_dict(orient="records"),
+                        "changed_idx": changed_idx,
+                        "base_ids": base_ids,
+                        "edited": edited.to_dict(orient="records"),
                     }
 
                 if st.session_state.get("confirm_ret_save", {}).get("selected_id") == selected_id:
-                    payload = st.session_state["confirm_ret_save"]
                     st.warning("Confirma salvar as alterações em Retornos/Pendências?")
                     c_ok, c_cancel = st.columns([0.2, 0.2], gap="small")
                     with c_ok:
                         if st.button("Confirmar", type="primary", key=f"btn_confirm_ret_save_{selected_id}"):
-                            recs = payload.get("snapshot") or []
-                            for rid in payload.get("changed_ids", []):
-                                row = next((r for r in recs if int(r["_id"]) == int(rid)), None)
-                                if not row:
-                                    continue
-                                status = "Respondido" if bool(row.get("Respondido")) else "Pendente"
-                                obs = (row.get("Obs") or "").strip() or None
-                                update_retorno_status_obs(int(rid), status, obs)
+                            payload = st.session_state["confirm_ret_save"]
+                            recs = payload.get("edited") or []
+                            for i in payload.get("changed_idx", []):
+                                rid = int(payload["base_ids"][i])
+                                row = recs[i] if i < len(recs) else {}
+                                status = str(row.get("Status") or "Pendente").strip().title()
+                                if status not in ["Pendente", "Respondido"]:
+                                    status = "Pendente"
+                                obs = (str(row.get("Obs") or "").strip() or None)
+                                update_retorno_status_obs(rid, status, obs)
 
                             st.session_state.pop("confirm_ret_save", None)
                             st.toast("Alterações salvas ✅")
@@ -1061,7 +1031,7 @@ elif page == "📄 Documento":
             with c_add1:
                 novo_nome = st.text_input("Adicionar novo responsável", key="resp_add_text")
             with c_add2:
-                if st.button("Adicionar", key="resp_add_btn", type="primary"):
+                if st.button("Adicionar", key="resp_add_btn", type="primary", use_container_width=True):
                     ok, msg = add_master_om(novo_nome)
                     if ok:
                         st.toast("Responsável adicionado ✅")
@@ -1075,7 +1045,7 @@ elif page == "📄 Documento":
 
             lista_atual = get_master_oms()
             remover = st.multiselect("Remover responsáveis do sistema", options=lista_atual, key="resp_del_ms")
-            if st.button("Remover selecionados", key="resp_del_btn"):
+            if st.button("Remover selecionados", key="resp_del_btn", use_container_width=True):
                 ok, msg = delete_master_oms(remover)
                 if ok:
                     st.session_state["_remover_da_selecao"] = remover
@@ -1092,13 +1062,16 @@ elif page == "📄 Documento":
 
         oms = get_master_oms()
 
-        c_left, c_mid, c_right = st.columns([0.18, 1, 0.26], gap="small")
-        with c_left:
-            if st.button("Circular", key="resp_circular", disabled=(not oms)):
+        # ===== Barra organizada: Circular | Multiselect | Salvar =====
+        bar1, bar2, bar3 = st.columns([0.20, 1, 0.30], gap="small")
+
+        with bar1:
+            st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+            if st.button("Circular", key="resp_circular", disabled=(not oms), use_container_width=True):
                 st.session_state["sol_responsaveis"] = oms[:]
                 st.rerun()
 
-        with c_mid:
+        with bar2:
             st.multiselect(
                 "Responsáveis",
                 options=oms,
@@ -1107,9 +1080,14 @@ elif page == "📄 Documento":
                 label_visibility="collapsed",
             )
 
-        with c_right:
-            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            btn_salvar_solic = st.button("Salvar Solicitação", type="primary", key="btn_salvar_solic_compacto")
+        with bar3:
+            st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+            btn_salvar_solic = st.button(
+                "Salvar Solicitação",
+                type="primary",
+                key="btn_salvar_solic_compacto",
+                use_container_width=True,
+            )
 
         if btn_salvar_solic:
             assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
