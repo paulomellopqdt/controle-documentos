@@ -5,12 +5,11 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
-
 RETORNO_STATUS = ["Pendente", "Respondido"]
 
 
 # =========================================================
-# CONFIG
+# CONFIG / THEME
 # =========================================================
 st.set_page_config(layout="wide")
 
@@ -51,8 +50,8 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; 
   border: 1px solid rgba(49,51,63,0.22);
 }
 
-/* ---------- Dataframes ---------- */
-div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
+/* ---------- Data editors ---------- */
+div[data-testid="stDataEditor"]{
   border: 1px solid rgba(49,51,63,0.10);
   border-radius: 16px;
   overflow: hidden;
@@ -63,17 +62,6 @@ hr { border-color: rgba(49,51,63,0.10); }
 
 /* Separador vertical no Documento */
 .vline { height: 100%; border-left: 2px solid rgba(49,51,63,0.10); margin: 0 auto; }
-
-/* Badge */
-.badge{
-  display:inline-flex; align-items:center; gap:8px;
-  padding: 6px 10px; border-radius: 999px;
-  font-size: 0.85rem; border:1px solid rgba(49,51,63,0.12);
-}
-.badge-red{ background: rgba(239,68,68,0.10); color: #991b1b; }
-.badge-yellow{ background: rgba(234,179,8,0.12); color: #854d0e; }
-.badge-green{ background: rgba(34,197,94,0.12); color: #166534; }
-.badge-gray{ background: rgba(148,163,184,0.16); color: #334155; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -142,7 +130,7 @@ def require_auth():
             ok = st.form_submit_button("Criar conta", type="primary")
         if ok:
             try:
-                sb.auth.sign_up({"email": email, "password": password})
+                get_supabase().auth.sign_up({"email": email, "password": password})
                 st.success("Conta criada. Agora faça login na aba 'Entrar'.")
             except Exception:
                 st.error("Não foi possível criar a conta. Tente outro email ou uma senha mais forte.")
@@ -162,12 +150,7 @@ def sidebar_layout() -> tuple[str, str]:
             st.markdown(f"**👤 {user.email}**")
 
         st.markdown("---")
-        # ALTERAÇÃO 1: "Nome do Dashboard" -> "Nome"
-        st.text_input(
-            "Nome",
-            key="dash_name",
-            help="Este nome aparecerá no menu e no título principal.",
-        )
+        st.text_input("Nome", key="dash_name", help="Este nome aparecerá no menu e no título principal.")
         dash_title = (st.session_state.get("dash_name") or "Dashboard").strip() or "Dashboard"
 
         st.markdown("---")
@@ -195,6 +178,55 @@ def sidebar_layout() -> tuple[str, str]:
 
 
 # =========================================================
+# Helpers
+# =========================================================
+def _fmt_date_iso_to_ddmmyyyy(v):
+    if not v:
+        return "-"
+    try:
+        return pd.to_datetime(v).strftime("%d/%m/%Y")
+    except Exception:
+        return "-"
+
+
+def _parse_ddmmyyyy_to_date(s: str):
+    if not s or str(s).strip() in ["-", "NaT", "None"]:
+        return None
+    try:
+        return datetime.strptime(str(s).strip(), "%d/%m/%Y").date()
+    except Exception:
+        return None
+
+
+def indicador_status(status: str | None) -> str:
+    s = (status or "").strip().lower()
+    if s == "respondido":
+        return "🟢 Respondido"
+    return "🔴 Pendente"
+
+
+def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
+    assunto = caso.get("assunto_solic") or "-"
+    nr = caso.get("nr_doc_solicitado") or "-"
+    prazo = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
+
+    pendentes = []
+    if ret is not None and not ret.empty:
+        pendentes = ret[ret["status"].fillna("").str.lower() != "respondido"]["om"].fillna("").tolist()
+
+    pend_txt = "\n".join([f"- {p}" for p in pendentes]) if pendentes else "- (nenhum)"
+    return (
+        "🚨 Atenção!\n\n"
+        "Solicito verificar a situação do retorno referente a seguinte solicitação:\n\n"
+        f"📌 Assunto: {assunto}\n"
+        f"📄 Nr Doc: {nr}\n"
+        f"⏳ Prazo: {prazo}\n\n"
+        "👥 Pendentes:\n"
+        f"{pend_txt}\n"
+    )
+
+
+# =========================================================
 # CRUD (Supabase)
 # =========================================================
 def fetch_casos() -> pd.DataFrame:
@@ -206,59 +238,6 @@ def fetch_caso(caso_id: int) -> dict | None:
     res = _sb_table("casos").select("*").eq("id", caso_id).limit(1).execute()
     data = res.data or []
     return data[0] if data else None
-
-
-def fetch_caso_by_nr_recebido(nr_doc_recebido: str) -> dict | None:
-    nr = (nr_doc_recebido or "").strip()
-    if not nr:
-        return None
-    res = _sb_table("casos").select("*").eq("nr_doc_recebido", nr).order("id", desc=True).limit(1).execute()
-    data = res.data or []
-    return data[0] if data else None
-
-
-def update_documento_by_nr_recebido(nr_doc_recebido: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None):
-    payload = {
-        "assunto_doc": (assunto_doc or "").strip(),
-        "origem": (origem or "").strip() if origem and origem.strip() else None,
-        "prazo_final": prazo_final.isoformat() if prazo_final else None,
-        "observacoes": (obs or "").strip() if obs and obs.strip() else None,
-    }
-    _sb_table("casos").update(payload).eq("nr_doc_recebido", (nr_doc_recebido or "").strip()).execute()
-
-
-def insert_documento(nr_doc: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None):
-    user = st.session_state["sb_user"]
-    payload = {
-        "owner_id": user.id,
-        "nr_doc_recebido": (nr_doc or "").strip(),
-        "assunto_doc": (assunto_doc or "").strip(),
-        "origem": (origem or "").strip() if origem and origem.strip() else None,
-        "prazo_final": prazo_final.isoformat() if prazo_final else None,
-        "observacoes": (obs or "").strip() if obs and obs.strip() else None,
-        "status": "Recebido",
-        "created_at": datetime.now().isoformat(),
-    }
-    _sb_table("casos").insert(payload).execute()
-
-
-def insert_solicitacao_sem_documento(assunto_solic: str, prazo_om: date | None, nr_doc_solicitado: str | None) -> int:
-    user = st.session_state["sb_user"]
-    payload = {
-        "owner_id": user.id,
-        "nr_doc_recebido": "-",
-        "assunto_doc": "-",
-        "origem": "-",
-        "prazo_final": None,
-        "observacoes": "-",
-        "assunto_solic": (assunto_solic or "").strip() or "(sem solicitação)",
-        "prazo_om": prazo_om.isoformat() if prazo_om else None,
-        "nr_doc_solicitado": (nr_doc_solicitado or "").strip() or "00",
-        "status": "Distribuído",
-        "created_at": datetime.now().isoformat(),
-    }
-    res = _sb_table("casos").insert(payload).execute()
-    return int(res.data[0]["id"])
 
 
 def fetch_retornos(caso_id: int) -> pd.DataFrame:
@@ -278,25 +257,6 @@ def fetch_pendencias() -> pd.DataFrame:
     return dff.groupby("caso_id").size().reset_index(name="qtd")
 
 
-def set_resposta_e_status(caso_id: int, nr_doc_resposta: str | None):
-    nr = (nr_doc_resposta or "").strip()
-    if nr:
-        payload = {"nr_doc_resposta": nr, "status": "Resolvido", "resolved_at": date.today().isoformat()}
-    else:
-        payload = {"nr_doc_resposta": None, "status": "Pendente", "resolved_at": None}
-    _sb_table("casos").update(payload).eq("id", caso_id).execute()
-
-
-def archive_caso(caso_id: int):
-    user = st.session_state["sb_user"]
-    payload = {"owner_id": user.id, "caso_id": caso_id, "archived_at": datetime.now().isoformat()}
-    _sb_table("arquivados").upsert(payload, on_conflict="caso_id").execute()
-
-
-def unarchive_caso(caso_id: int):
-    _sb_table("arquivados").delete().eq("caso_id", caso_id).execute()
-
-
 def fetch_arquivados_ids() -> set[int]:
     res = _sb_table("arquivados").select("caso_id").execute()
     data = res.data or []
@@ -312,6 +272,24 @@ def fetch_arquivados_casos() -> pd.DataFrame:
     if df.empty:
         return df
     return df.sort_values("id", ascending=False)
+
+
+def update_caso_fields(caso_id: int, payload: dict):
+    _sb_table("casos").update(payload).eq("id", caso_id).execute()
+
+
+def update_retorno_fields(retorno_id: int, payload: dict):
+    _sb_table("retornos_om").update(payload).eq("id", retorno_id).execute()
+
+
+def archive_caso(caso_id: int):
+    user = st.session_state["sb_user"]
+    payload = {"owner_id": user.id, "caso_id": caso_id, "archived_at": datetime.now().isoformat()}
+    _sb_table("arquivados").upsert(payload, on_conflict="caso_id").execute()
+
+
+def unarchive_caso(caso_id: int):
+    _sb_table("arquivados").delete().eq("caso_id", caso_id).execute()
 
 
 def _normalize_name(s: str) -> str:
@@ -347,6 +325,40 @@ def delete_master_oms(nomes: list[str]):
         _sb_table("master_oms").delete().eq("nome", n).execute()
         _sb_table("retornos_om").delete().eq("om", n).execute()
     return True, "Responsáveis removidos ✅"
+
+
+def insert_documento(nr_doc: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None):
+    user = st.session_state["sb_user"]
+    payload = {
+        "owner_id": user.id,
+        "nr_doc_recebido": (nr_doc or "").strip(),
+        "assunto_doc": (assunto_doc or "").strip(),
+        "origem": (origem or "").strip() if origem and origem.strip() else None,
+        "prazo_final": prazo_final.isoformat() if prazo_final else None,
+        "observacoes": (obs or "").strip() if obs and obs.strip() else None,
+        "status": "Recebido",
+        "created_at": datetime.now().isoformat(),
+    }
+    _sb_table("casos").insert(payload).execute()
+
+
+def insert_solicitacao_sem_documento(assunto_solic: str, prazo_om: date | None, nr_doc_solicitado: str | None) -> int:
+    user = st.session_state["sb_user"]
+    payload = {
+        "owner_id": user.id,
+        "nr_doc_recebido": "-",
+        "assunto_doc": "-",
+        "origem": "-",
+        "prazo_final": None,
+        "observacoes": "-",
+        "assunto_solic": (assunto_solic or "").strip() or "(sem solicitação)",
+        "prazo_om": prazo_om.isoformat() if prazo_om else None,
+        "nr_doc_solicitado": (nr_doc_solicitado or "").strip() or "00",
+        "status": "Distribuído",
+        "created_at": datetime.now().isoformat(),
+    }
+    res = _sb_table("casos").insert(payload).execute()
+    return int(res.data[0]["id"])
 
 
 def salvar_ou_atualizar_solicitacao(
@@ -390,144 +402,11 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
-def _fmt_date_iso_to_ddmmyyyy(v):
-    if not v:
-        return "-"
-    try:
-        return pd.to_datetime(v).strftime("%d/%m/%Y")
-    except Exception:
-        return "-"
-
-
-def _parse_ddmmyyyy_to_date(s: str):
-    if not s or str(s).strip() in ["-", "NaT", "None"]:
-        return None
-    try:
-        return datetime.strptime(str(s).strip(), "%d/%m/%Y").date()
-    except Exception:
-        return None
-
-
-def _row_style_acompanhamento(row):
-    status = str(row.get("Status", "")).strip().lower()
-    if status == "resolvido":
-        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
-
-    prazo = _parse_ddmmyyyy_to_date(row.get("Prazo Final", ""))
-    if prazo is None:
-        return [""] * len(row)
-
-    today = date.today()
-    diff = (prazo - today).days
-
-    if diff <= 0:
-        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
-    if 1 <= diff <= 5:
-        return ["background-color: #fef9c3; color: #713f12;"] * len(row)
-    return [""] * len(row)
-
-
-# ALTERAÇÃO 2: Uma ÚNICA tabela "Retorno / Pendências" com cor por STATUS
-def _row_style_retornos_only(row):
-    s = str(row.get("Status", "")).strip().lower()
-    if s == "respondido":
-        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
-    if s == "pendente":
-        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
-    return [""] * len(row)
-
-
-def _parse_caso_id_from_label(label: str) -> int | None:
-    if "(ID " not in label:
-        return None
-    try:
-        return int(label.split("(ID ")[1].split(")")[0])
-    except Exception:
-        return None
-
-
-def _clear_forms(keep_doc_select: bool = False):
-    st.session_state["selected_doc_id"] = None
-    st.session_state["doc_disabled"] = False
-
-    st.session_state["doc_nr"] = ""
-    st.session_state["doc_assunto_doc"] = ""
-    st.session_state["doc_origem"] = ""
-    st.session_state["doc_prazo_final"] = None
-    st.session_state["doc_obs"] = ""
-
-    st.session_state["sol_assunto_solic"] = ""
-    st.session_state["sol_prazo_om"] = None
-    st.session_state["sol_doc_solicitado"] = ""
-    st.session_state["sol_responsaveis"] = []
-    st.session_state["nr_doc_resposta_input"] = ""
-
-    if not keep_doc_select:
-        st.session_state["sol_doc_select"] = "00 | Nova Solicitação sem Documento"
-
-
-def _load_selected_document_into_forms():
-    label = st.session_state.get("sol_doc_select", "00 | Nova Solicitação sem Documento")
-    if label.startswith("00 | Nova"):
-        _clear_forms(keep_doc_select=True)
-        return
-
-    caso_id = _parse_caso_id_from_label(label)
-    if not caso_id:
-        _clear_forms(keep_doc_select=True)
-        return
-
-    caso = fetch_caso(caso_id)
-    if not caso:
-        _clear_forms(keep_doc_select=True)
-        return
-
-    st.session_state["selected_doc_id"] = caso_id
-
-    is_sem_doc = (caso.get("nr_doc_recebido") == "-" or caso.get("assunto_doc") == "-")
-    st.session_state["doc_disabled"] = bool(is_sem_doc)
-
-    st.session_state["doc_nr"] = caso.get("nr_doc_recebido") or ""
-    st.session_state["doc_assunto_doc"] = caso.get("assunto_doc") or ""
-    st.session_state["doc_origem"] = caso.get("origem") or ""
-    st.session_state["doc_prazo_final"] = pd.to_datetime(caso["prazo_final"]).date() if caso.get("prazo_final") else None
-    st.session_state["doc_obs"] = caso.get("observacoes") or ""
-
-    st.session_state["sol_assunto_solic"] = caso.get("assunto_solic") or ""
-    st.session_state["sol_prazo_om"] = pd.to_datetime(caso["prazo_om"]).date() if caso.get("prazo_om") else None
-    st.session_state["sol_doc_solicitado"] = caso.get("nr_doc_solicitado") or ""
-
-
-def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
-    assunto = caso.get("assunto_solic") or "-"
-    nr = caso.get("nr_doc_solicitado") or "-"
-    prazo = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
-
-    pendentes = []
-    if ret is not None and not ret.empty:
-        pendentes = ret[ret["status"].fillna("").str.lower() != "respondido"]["om"].fillna("").tolist()
-
-    pend_txt = "\n".join([f"- {p}" for p in pendentes]) if pendentes else "- (nenhum)"
-    return (
-        "🚨 Atenção!\n\n"
-        "Solicito verificar a situação do retorno referente a seguinte solicitação:\n\n"
-        f"📌 Assunto: {assunto}\n"
-        f"📄 Nr Doc: {nr}\n"
-        f"⏳ Prazo: {prazo}\n\n"
-        "👥 Pendentes:\n"
-        f"{pend_txt}\n"
-    )
-
-
 # =========================================================
 # APP START
 # =========================================================
 require_auth()
 page, dash_title = sidebar_layout()
-
-st.session_state.setdefault("sol_responsaveis", [])
-st.session_state.setdefault("doc_disabled", False)
-st.session_state.setdefault("sol_doc_select", "00 | Nova Solicitação sem Documento")
 
 
 # =========================================================
@@ -576,7 +455,7 @@ if page == f"📋 {dash_title}":
 
         df_show = pd.DataFrame(
             {
-                "id": df_acomp["id"],
+                "ID": df_acomp["id"].astype(int),
                 "Nr Doc (Recebido)": df_acomp["nr_doc_recebido"].fillna("-"),
                 "Assunto (Documento)": df_acomp["assunto_doc"].fillna("-"),
                 "Assunto (Solicitação)": df_acomp.get("assunto_solic").fillna("-"),
@@ -584,7 +463,7 @@ if page == f"📋 {dash_title}":
                 "Prazo Final": pd.to_datetime(df_acomp.get("prazo_final"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Prazo OM": pd.to_datetime(df_acomp.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Nr Doc (Solicitado)": df_acomp.get("nr_doc_solicitado").fillna("-"),
-                "Nr Doc (Resposta)": df_acomp.get("nr_doc_resposta").fillna("-"),
+                "Nr Doc (Resposta)": df_acomp.get("nr_doc_resposta").fillna(""),
                 "Status": df_acomp.get("status").fillna("-"),
                 "Pendências (Qtd)": df_acomp["Pendências (Qtd)"],
             }
@@ -600,37 +479,118 @@ if page == f"📋 {dash_title}":
 
         topL, topR = st.columns([1, 0.22])
         with topL:
-            st.subheader("Acompanhamento")
+            st.subheader("Acompanhamento (editável)")
         with topR:
             st.markdown("<div style='padding-top:6px'></div>", unsafe_allow_html=True)
-            btn_arquivar = st.button("🗄️ Arquivar", type="primary", key="dash_btn_arquivar")
+            btn_arquivar = st.button("🗄️ Arquivar selecionado", type="primary", key="dash_btn_arquivar")
 
-        df_styled = df_show.style.apply(_row_style_acompanhamento, axis=1)
+        # ---------------------------
+        # EDITOR: Acompanhamento
+        # ---------------------------
+        st.session_state.setdefault("acomp_editor_df", df_show.copy())
 
-        sel = st.dataframe(
-            df_styled,
+        # sempre sincroniza com o que está vindo do banco (evita “editor travado”)
+        st.session_state["acomp_editor_df"] = df_show.copy()
+
+        edited_acomp = st.data_editor(
+            st.session_state["acomp_editor_df"],
             use_container_width=True,
             hide_index=True,
-            selection_mode="single-row",
-            on_select="rerun",
-            key="tbl_dash",
+            column_config={
+                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                "Nr Doc (Resposta)": st.column_config.TextColumn("Nr Doc (Resposta)", help="Edite e salve para atualizar no banco."),
+                "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Distribuído", "Recebido", "Resolvido"]),
+            },
+            disabled=[
+                "Nr Doc (Recebido)",
+                "Assunto (Documento)",
+                "Assunto (Solicitação)",
+                "Origem",
+                "Prazo Final",
+                "Prazo OM",
+                "Nr Doc (Solicitado)",
+                "Pendências (Qtd)",
+            ],
+            key="acomp_data_editor",
         )
 
-        selected_id = None
-        if sel and sel.get("selection", {}).get("rows"):
-            idx = sel["selection"]["rows"][0]
-            selected_id = int(df_show.iloc[idx]["id"])
+        # seleção do editor (Streamlit ainda não expõe seleção do data_editor)
+        # então: arquivar via campo de ID.
+        arch_col1, arch_col2 = st.columns([0.35, 0.65])
+        with arch_col1:
+            id_para_arquivar = st.number_input("ID para arquivar", min_value=0, value=0, step=1)
+        with arch_col2:
+            st.markdown("<div class='small-muted'>Dica: o ID está na primeira coluna da tabela.</div>", unsafe_allow_html=True)
 
-        if btn_arquivar and selected_id:
-            archive_caso(selected_id)
-            st.toast("Arquivado ✅")
-            st.rerun()
-        elif btn_arquivar and not selected_id:
-            st.warning("Selecione uma linha na tabela.")
+        if btn_arquivar:
+            if not id_para_arquivar:
+                st.warning("Informe um ID válido para arquivar.")
+            else:
+                archive_caso(int(id_para_arquivar))
+                st.toast("Arquivado ✅")
+                st.rerun()
 
-        if selected_id:
-            caso = fetch_caso(selected_id) or {}
-            ret = fetch_retornos(selected_id)
+        # salvar alterações (com confirmação)
+        btn_save_acomp = st.button("Salvar alterações do Acompanhamento", type="primary", key="btn_save_acomp")
+        if btn_save_acomp:
+            st.session_state["confirm_save_acomp"] = True
+            st.session_state["acomp_pending_df"] = edited_acomp.copy()
+
+        if st.session_state.get("confirm_save_acomp"):
+            st.warning("Confirma salvar as alterações do Acompanhamento?")
+            c1, c2 = st.columns([0.2, 0.2])
+            with c1:
+                if st.button("Confirmar", type="primary", key="confirm_save_acomp_yes"):
+                    pending = st.session_state.get("acomp_pending_df")
+                    if pending is not None and not pending.empty:
+                        # compara com df_show original (antes de editar)
+                        base = df_show.set_index("ID")
+                        pend = pending.set_index("ID")
+                        changed_ids = sorted(list(set(pend.index) & set(base.index)))
+
+                        for cid in changed_ids:
+                            row_new = pend.loc[cid]
+                            row_old = base.loc[cid]
+
+                            payload = {}
+                            if str(row_new.get("Status", "")).strip() != str(row_old.get("Status", "")).strip():
+                                payload["status"] = str(row_new.get("Status", "")).strip() or None
+
+                            # nr_doc_resposta
+                            new_nr = str(row_new.get("Nr Doc (Resposta)", "")).strip()
+                            old_nr = str(row_old.get("Nr Doc (Resposta)", "")).strip()
+                            if new_nr != old_nr:
+                                payload["nr_doc_resposta"] = new_nr if new_nr else None
+                                # regra simples: se preencher nr resposta, marca como Resolvido
+                                if new_nr:
+                                    payload["status"] = "Resolvido"
+                                    payload["resolved_at"] = date.today().isoformat()
+                                else:
+                                    payload["resolved_at"] = None
+
+                            if payload:
+                                update_caso_fields(int(cid), payload)
+
+                    st.session_state.pop("confirm_save_acomp", None)
+                    st.session_state.pop("acomp_pending_df", None)
+                    st.toast("Alterações salvas ✅")
+                    st.rerun()
+            with c2:
+                if st.button("Cancelar", key="confirm_save_acomp_no"):
+                    st.session_state.pop("confirm_save_acomp", None)
+                    st.session_state.pop("acomp_pending_df", None)
+                    st.info("Ação cancelada.")
+
+        st.divider()
+
+        # ---------------------------
+        # Detalhes + Mensagem + Retornos
+        # (pega um ID manual para detalhar)
+        # ---------------------------
+        detail_id = st.number_input("ID para ver Detalhes/Mensagem/Retornos", min_value=0, value=0, step=1, key="detail_id")
+        if detail_id:
+            caso = fetch_caso(int(detail_id)) or {}
+            ret = fetch_retornos(int(detail_id))
 
             with st.expander("Detalhes", expanded=True):
                 cA, cB, cC = st.columns([1, 1, 1], gap="large")
@@ -649,34 +609,83 @@ if page == f"📋 {dash_title}":
                     st.markdown("##### Resposta")
                     st.write("**Nr resposta:**", caso.get("nr_doc_resposta") or "-")
                     st.write("**Resolvido em:**", _fmt_date_iso_to_ddmmyyyy(caso.get("resolved_at")))
-                    nr_input = st.text_input("Atualizar Nr Resposta", value="", key="dash_nr_resp")
-                    if st.button("Salvar resposta", key="dash_salvar_resp", type="primary"):
-                        set_resposta_e_status(selected_id, nr_input.strip())
-                        st.toast("Atualizado ✅")
-                        st.rerun()
 
             with st.expander("Mensagem", expanded=False):
-                msg_key = f"msg_edit_{selected_id}"
+                msg_key = f"msg_edit_{detail_id}"
                 st.session_state.setdefault(msg_key, build_msg_cobranca(caso, ret))
-                st.text_area("Mensagem", key=msg_key, height=200, label_visibility="collapsed")
+                st.text_area("Mensagem", key=msg_key, height=220, label_visibility="collapsed")
 
-            # ✅ ÚNICA TABELA Retorno/Pendências (colorida) — sem editor extra
-            st.markdown("##### Retorno / Pendências")
+            st.markdown("##### Retorno / Pendências (editável)")
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                view_df = pd.DataFrame(
+                # editor único: ID oculto (coluna existe, mas escondemos no UI com disabled e label curto)
+                ret_editor = pd.DataFrame(
                     {
+                        "retorno_id": ret["id"].astype(int),
+                        "Indicador": [indicador_status(x) for x in ret["status"].fillna("Pendente").tolist()],
                         "Responsável": ret["om"].fillna("").astype(str),
                         "Status": ret["status"].fillna("Pendente").astype(str).str.title(),
                         "Obs": ret["observacoes"].fillna("").astype(str),
                     }
                 )
-                st.dataframe(
-                    view_df.style.apply(_row_style_retornos_only, axis=1),
+
+                edited_ret = st.data_editor(
+                    ret_editor,
                     use_container_width=True,
                     hide_index=True,
+                    column_config={
+                        "retorno_id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                        "Indicador": st.column_config.TextColumn(" ", disabled=True, width="small"),
+                        "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
+                        "Status": st.column_config.SelectboxColumn("Status", options=RETORNO_STATUS),
+                        "Obs": st.column_config.TextColumn("Obs"),
+                    },
+                    disabled=["retorno_id", "Indicador", "Responsável"],
+                    key=f"ret_editor_{detail_id}",
                 )
+
+                btn_save_ret = st.button("Salvar alterações de Retornos", type="primary", key=f"btn_save_ret_{detail_id}")
+                if btn_save_ret:
+                    st.session_state[f"confirm_save_ret_{detail_id}"] = True
+                    st.session_state[f"ret_pending_{detail_id}"] = edited_ret.copy()
+
+                if st.session_state.get(f"confirm_save_ret_{detail_id}"):
+                    st.warning("Confirma salvar as alterações de Retornos/Pendências?")
+                    c1, c2 = st.columns([0.2, 0.2])
+                    with c1:
+                        if st.button("Confirmar", type="primary", key=f"confirm_save_ret_yes_{detail_id}"):
+                            pending = st.session_state.get(f"ret_pending_{detail_id}")
+                            if pending is not None and not pending.empty:
+                                base = ret_editor.set_index("retorno_id")
+                                pendx = pending.set_index("retorno_id")
+
+                                ids = sorted(list(set(pendx.index) & set(base.index)))
+                                for rid in ids:
+                                    new = pendx.loc[rid]
+                                    old = base.loc[rid]
+
+                                    payload = {}
+                                    if str(new.get("Status", "")).strip().lower() != str(old.get("Status", "")).strip().lower():
+                                        payload["status"] = str(new.get("Status", "")).strip().title()
+
+                                    new_obs = str(new.get("Obs", "")).strip()
+                                    old_obs = str(old.get("Obs", "")).strip()
+                                    if new_obs != old_obs:
+                                        payload["observacoes"] = new_obs if new_obs else None
+
+                                    if payload:
+                                        update_retorno_fields(int(rid), payload)
+
+                            st.session_state.pop(f"confirm_save_ret_{detail_id}", None)
+                            st.session_state.pop(f"ret_pending_{detail_id}", None)
+                            st.toast("Retornos atualizados ✅")
+                            st.rerun()
+                    with c2:
+                        if st.button("Cancelar", key=f"confirm_save_ret_no_{detail_id}"):
+                            st.session_state.pop(f"confirm_save_ret_{detail_id}", None)
+                            st.session_state.pop(f"ret_pending_{detail_id}", None)
+                            st.info("Ação cancelada.")
 
 
 # =========================================================
@@ -702,88 +711,37 @@ elif page == "📄 Documento":
     with col_sep:
         st.markdown('<div class="vline"></div>', unsafe_allow_html=True)
 
-    # ---- Cadastrar Documento ----
     with col_doc:
         st.subheader("Cadastrar Documento")
-        doc_disabled = bool(st.session_state.get("doc_disabled", False))
-
         r1c1, r1c2 = st.columns(2, gap="small")
         with r1c1:
-            st.text_input("Nº do Documento (Recebido)", key="doc_nr", disabled=doc_disabled)
+            doc_nr = st.text_input("Nº do Documento (Recebido)", key="doc_nr")
         with r1c2:
-            st.text_input("Assunto do Documento", key="doc_assunto_doc", disabled=doc_disabled)
+            doc_assunto = st.text_input("Assunto do Documento", key="doc_assunto_doc")
 
         r2c1, r2c2 = st.columns(2, gap="small")
         with r2c1:
-            st.text_input("Origem (opcional)", key="doc_origem", disabled=doc_disabled)
+            doc_origem = st.text_input("Origem (opcional)", key="doc_origem")
         with r2c2:
-            st.date_input("Prazo Final", key="doc_prazo_final", value=None, disabled=doc_disabled, format="DD/MM/YYYY")
+            doc_prazo = st.date_input("Prazo Final", key="doc_prazo_final", value=None, format="DD/MM/YYYY")
 
-        st.text_area("Observações", key="doc_obs", height=220, disabled=doc_disabled)
+        doc_obs = st.text_area("Observações", key="doc_obs", height=220)
 
-        if st.button("Salvar Documento", type="primary", key="btn_salvar_doc_novo", disabled=doc_disabled):
-            nr_doc_in = (st.session_state.get("doc_nr") or "").strip()
-            assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
-
-            if not nr_doc_in or not assunto_doc:
+        if st.button("Salvar Documento", type="primary", key="btn_save_doc"):
+            if not doc_nr.strip() or not doc_assunto.strip():
                 st.error("Informe o Nº do Documento (Recebido) e o Assunto do Documento.")
             else:
-                existente = fetch_caso_by_nr_recebido(nr_doc_in)
-                st.session_state["confirm_doc_action"] = {
-                    "mode": "update" if existente else "insert",
-                    "nr": nr_doc_in,
-                    "assunto_doc": assunto_doc,
-                    "origem": st.session_state.get("doc_origem") or "",
-                    "prazo_final": st.session_state.get("doc_prazo_final"),
-                    "obs": st.session_state.get("doc_obs") or "",
-                }
+                insert_documento(doc_nr, doc_assunto, doc_origem, doc_prazo, doc_obs)
+                st.toast("Documento salvo ✅")
+                st.rerun()
 
-        if st.session_state.get("confirm_doc_action"):
-            payload = st.session_state["confirm_doc_action"]
-            st.warning("Confirma **SALVAR**? (Atualiza se já existir.)")
-            cx1, cx2 = st.columns([0.3, 0.3], gap="small")
-            with cx1:
-                if st.button("Confirmar", type="primary", key="btn_confirm_doc"):
-                    try:
-                        if payload.get("mode") == "update":
-                            update_documento_by_nr_recebido(
-                                nr_doc_recebido=payload["nr"],
-                                assunto_doc=payload["assunto_doc"],
-                                origem=payload["origem"],
-                                prazo_final=payload["prazo_final"],
-                                obs=payload["obs"],
-                            )
-                            st.toast("Documento atualizado ✅")
-                        else:
-                            insert_documento(
-                                nr_doc=payload["nr"],
-                                assunto_doc=payload["assunto_doc"],
-                                origem=payload["origem"],
-                                prazo_final=payload["prazo_final"],
-                                obs=payload["obs"],
-                            )
-                            st.toast("Documento salvo ✅")
-
-                        st.session_state.pop("confirm_doc_action", None)
-                        _clear_forms()
-                        st.success("Operação concluída ✅")
-                        st.rerun()
-                    except Exception as e:
-                        st.session_state.pop("confirm_doc_action", None)
-                        st.error(f"Erro ao salvar documento: {e}")
-            with cx2:
-                if st.button("Cancelar", key="btn_cancel_doc"):
-                    st.session_state.pop("confirm_doc_action", None)
-                    st.info("Ação cancelada. (Campos mantidos)")
-
-    # ---- Solicitação ----
     with col_sol:
         st.subheader("Cadastrar / Atualizar Solicitação")
 
         df_all = fetch_casos()
-        arquivados_ids = fetch_arquivados_ids()
+        arq_ids = fetch_arquivados_ids()
         if not df_all.empty:
-            df_all = df_all[~df_all["id"].astype(int).isin(arquivados_ids)]
+            df_all = df_all[~df_all["id"].astype(int).isin(arq_ids)]
 
         options = ["00 | Nova Solicitação sem Documento"]
         if not df_all.empty:
@@ -792,25 +750,21 @@ elif page == "📄 Documento":
                 assunto_doc = (r.get("assunto_doc") or "").strip()
                 assunto_solic = (r.get("assunto_solic") or "").strip()
                 nr_solic = (r.get("nr_doc_solicitado") or "").strip()
-
                 if nr_rec == "-" or assunto_doc == "-":
                     label = f"{assunto_solic} | {nr_solic or '00'} (ID {r['id']})"
                 else:
                     label = f"{nr_rec} | {assunto_doc} (ID {r['id']})"
                 options.append(label)
 
-        if st.session_state.get("sol_doc_select") not in options:
-            st.session_state["sol_doc_select"] = options[0]
+        st.session_state.setdefault("sol_doc_select", options[0])
+        st.selectbox("Documento", options, key="sol_doc_select")
 
-        st.selectbox("Documento", options, key="sol_doc_select", on_change=_load_selected_document_into_forms)
-
-        st.text_input("Assunto da Solicitação", key="sol_assunto_solic")
-
+        assunto_solic = st.text_input("Assunto da Solicitação", key="sol_assunto_solic")
         cS1, cS2 = st.columns([1, 1], gap="small")
         with cS1:
-            st.date_input("Prazo das OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
+            prazo_om = st.date_input("Prazo das OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
         with cS2:
-            st.text_input("Nr do documento (Solicitado)", key="sol_doc_solicitado")
+            nr_doc_solicitado = st.text_input("Nr do documento (Solicitado)", key="sol_doc_solicitado")
 
         st.markdown("### Responsáveis")
         with st.expander("Gerenciar responsáveis", expanded=False):
@@ -822,7 +776,6 @@ elif page == "📄 Documento":
                     ok, msg = add_master_om(novo_nome)
                     if ok:
                         st.toast("Responsável adicionado ✅")
-                        st.session_state["resp_add_text"] = ""
                         st.success(msg)
                         st.rerun()
                     else:
@@ -841,81 +794,32 @@ elif page == "📄 Documento":
                     st.error(msg)
 
         oms = get_master_oms()
-        bar1, bar2, bar3 = st.columns([0.20, 1, 0.30], gap="small")
+        st.session_state.setdefault("sol_responsaveis", [])
 
+        bar1, bar2, bar3 = st.columns([0.20, 1, 0.30], gap="small")
         with bar1:
             st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-            if st.button("Circular", key="resp_circular", disabled=(not oms), use_container_width=True):
+            if st.button("Circular", disabled=(not oms), use_container_width=True):
                 st.session_state["sol_responsaveis"] = oms[:]
                 st.rerun()
-
         with bar2:
-            st.multiselect(
-                "Responsáveis",
-                options=oms,
-                key="sol_responsaveis",
-                help="Digite para buscar. Você pode selecionar vários.",
-                label_visibility="collapsed",
-            )
-
+            st.multiselect("Responsáveis", options=oms, key="sol_responsaveis", label_visibility="collapsed")
         with bar3:
             st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-            btn_salvar_solic = st.button("Salvar Solicitação", type="primary", key="btn_salvar_solic", use_container_width=True)
+            salvar = st.button("Salvar Solicitação", type="primary", use_container_width=True)
 
-        if btn_salvar_solic:
-            assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
+        if salvar:
             selecionadas = st.session_state.get("sol_responsaveis", []) or []
-            nr_doc_solicitado = (st.session_state.get("sol_doc_solicitado") or "").strip() or "00"
-
-            if not assunto_solic:
+            if not assunto_solic.strip():
                 st.error("Informe o Assunto da Solicitação.")
             elif not selecionadas:
                 st.error("Selecione ao menos 1 Responsável.")
             else:
-                st.session_state["confirm_solic_action"] = {
-                    "assunto_solic": assunto_solic,
-                    "prazo_om": st.session_state.get("sol_prazo_om"),
-                    "selecionadas": selecionadas,
-                    "nr_doc_solicitado": nr_doc_solicitado,
-                    "selected_label": st.session_state.get("sol_doc_select"),
-                    "selected_doc_id": st.session_state.get("selected_doc_id"),
-                }
-
-        if st.session_state.get("confirm_solic_action"):
-            st.warning("Confirma **SALVAR** esta Solicitação?")
-            cx1, cx2 = st.columns([0.3, 0.3], gap="small")
-            with cx1:
-                if st.button("Confirmar", type="primary", key="btn_confirm_solic"):
-                    payload = st.session_state["confirm_solic_action"]
-                    selected_label = payload["selected_label"] or "00 | Nova Solicitação sem Documento"
-                    sel_id = payload["selected_doc_id"]
-
-                    if selected_label.startswith("00 | Nova") or sel_id is None:
-                        sel_id = insert_solicitacao_sem_documento(
-                            assunto_solic=payload["assunto_solic"],
-                            prazo_om=payload["prazo_om"],
-                            nr_doc_solicitado=payload["nr_doc_solicitado"],
-                        )
-                        st.session_state["selected_doc_id"] = sel_id
-                        st.session_state["sol_doc_select"] = f"{payload['assunto_solic']} | {payload['nr_doc_solicitado']} (ID {sel_id})"
-
-                    salvar_ou_atualizar_solicitacao(
-                        caso_id=sel_id,
-                        assunto_solic=payload["assunto_solic"],
-                        prazo_om=payload["prazo_om"],
-                        selecionadas=payload["selecionadas"],
-                        nr_doc_solicitado=payload["nr_doc_solicitado"],
-                    )
-
-                    st.session_state.pop("confirm_solic_action", None)
-                    st.toast("Solicitação salva ✅")
-                    _clear_forms()
-                    st.rerun()
-
-            with cx2:
-                if st.button("Cancelar", key="btn_cancel_solic"):
-                    st.session_state.pop("confirm_solic_action", None)
-                    st.info("Ação cancelada.")
+                # nova sem documento sempre (simplificado)
+                caso_id = insert_solicitacao_sem_documento(assunto_solic, prazo_om, nr_doc_solicitado or "00")
+                salvar_ou_atualizar_solicitacao(caso_id, assunto_solic, prazo_om, selecionadas, nr_doc_solicitado or "00")
+                st.toast("Solicitação salva ✅")
+                st.rerun()
 
 
 # =========================================================
@@ -931,6 +835,7 @@ else:
     else:
         df_a_show = pd.DataFrame(
             {
+                "ID": df_a["id"].astype(int),
                 "Nr Doc (Recebido)": df_a["nr_doc_recebido"].fillna("-"),
                 "Assunto (Documento)": df_a["assunto_doc"].fillna("-"),
                 "Assunto (Solicitação)": df_a.get("assunto_solic").fillna("-"),
@@ -943,3 +848,13 @@ else:
             }
         )
         st.dataframe(df_a_show, use_container_width=True, hide_index=True)
+
+        c1, c2 = st.columns([0.3, 0.3])
+        with c1:
+            rid = st.number_input("ID para restaurar", min_value=0, value=0, step=1)
+        with c2:
+            if st.button("Restaurar", type="primary"):
+                if rid:
+                    unarchive_caso(int(rid))
+                    st.toast("Restaurado ✅")
+                    st.rerun()
