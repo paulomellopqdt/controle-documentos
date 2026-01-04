@@ -7,6 +7,8 @@ from supabase import create_client, Client
 
 
 RETORNO_STATUS = ["Pendente", "Respondido"]
+STATUS_DISPLAY = {"Pendente": "🔴 Pendente", "Respondido": "🟢 Respondido"}
+DISPLAY_TO_STATUS = {v: k for k, v in STATUS_DISPLAY.items()}
 
 
 # =========================================================
@@ -51,7 +53,7 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; 
   border: 1px solid rgba(49,51,63,0.22);
 }
 
-/* ---------- Dataframes ---------- */
+/* ---------- Dataframes / Editors ---------- */
 div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   border: 1px solid rgba(49,51,63,0.10);
   border-radius: 16px;
@@ -59,21 +61,19 @@ div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   box-shadow: 0 6px 22px rgba(15, 23, 42, 0.04);
 }
 
+/* Centralizar cabeçalho e células */
+div[data-testid="stDataFrame"] table th,
+div[data-testid="stDataFrame"] table td,
+div[data-testid="stDataEditor"] table th,
+div[data-testid="stDataEditor"] table td {
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
 hr { border-color: rgba(49,51,63,0.10); }
 
 /* Separador vertical no Documento */
 .vline { height: 100%; border-left: 2px solid rgba(49,51,63,0.10); margin: 0 auto; }
-
-/* Badge */
-.badge{
-  display:inline-flex; align-items:center; gap:8px;
-  padding: 6px 10px; border-radius: 999px;
-  font-size: 0.85rem; border:1px solid rgba(49,51,63,0.12);
-}
-.badge-red{ background: rgba(239,68,68,0.10); color: #991b1b; }
-.badge-yellow{ background: rgba(234,179,8,0.12); color: #854d0e; }
-.badge-green{ background: rgba(34,197,94,0.12); color: #166534; }
-.badge-gray{ background: rgba(148,163,184,0.16); color: #334155; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -105,6 +105,42 @@ def _sb_table(name: str):
     return sb.table(name)
 
 
+def _auth_set_session_from_state():
+    """Garante que o client auth está com a sessão atual (pra update_user persistir)."""
+    sb = get_supabase()
+    sess = st.session_state.get("sb_session")
+    if not sess:
+        return
+    try:
+        access_token = getattr(sess, "access_token", None)
+        refresh_token = getattr(sess, "refresh_token", None)
+        if access_token and refresh_token:
+            sb.auth.set_session(access_token, refresh_token)
+    except Exception:
+        pass
+
+
+def load_dash_name_from_user() -> str:
+    user = st.session_state.get("sb_user")
+    if not user:
+        return "Dashboard"
+    meta = getattr(user, "user_metadata", None) or {}
+    name = (meta.get("dash_name") or "").strip()
+    return name or "Dashboard"
+
+
+def save_dash_name_to_user(name: str):
+    name = (name or "").strip() or "Dashboard"
+    sb = get_supabase()
+    _auth_set_session_from_state()
+    try:
+        res = sb.auth.update_user({"data": {"dash_name": name}})
+        if getattr(res, "user", None):
+            st.session_state["sb_user"] = res.user
+    except Exception:
+        pass
+
+
 # =========================================================
 # Auth
 # =========================================================
@@ -131,6 +167,9 @@ def require_auth():
                 res = sb.auth.sign_in_with_password({"email": email, "password": password})
                 st.session_state["sb_session"] = res.session
                 st.session_state["sb_user"] = res.user
+
+                # carrega nome salvo do usuário
+                st.session_state["dash_name"] = load_dash_name_from_user()
                 st.rerun()
             except Exception:
                 st.error("Não foi possível entrar. Verifique email e senha.")
@@ -150,8 +189,14 @@ def require_auth():
     st.stop()
 
 
+def _on_change_dash_name():
+    # salva no Supabase Auth (persistente por usuário)
+    save_dash_name_to_user(st.session_state.get("dash_name", "Dashboard"))
+
+
 def sidebar_layout() -> tuple[str, str]:
-    st.session_state.setdefault("dash_name", "Dashboard")
+    # garante que existe e vem do perfil
+    st.session_state.setdefault("dash_name", load_dash_name_from_user())
 
     with st.sidebar:
         st.markdown("## 📊 Controle de Documentos")
@@ -166,6 +211,7 @@ def sidebar_layout() -> tuple[str, str]:
             "Nome",
             key="dash_name",
             help="Este nome aparecerá no menu e no título principal.",
+            on_change=_on_change_dash_name,
         )
         dash_title = (st.session_state.get("dash_name") or "Dashboard").strip() or "Dashboard"
 
@@ -296,10 +342,6 @@ def archive_caso(caso_id: int):
     user = st.session_state["sb_user"]
     payload = {"owner_id": user.id, "caso_id": caso_id, "archived_at": datetime.now().isoformat()}
     _sb_table("arquivados").upsert(payload, on_conflict="caso_id").execute()
-
-
-def unarchive_caso(caso_id: int):
-    _sb_table("arquivados").delete().eq("caso_id", caso_id).execute()
 
 
 def fetch_arquivados_ids() -> set[int]:
@@ -657,9 +699,10 @@ if page == f"📋 {dash_title}":
 
             # =========================================================
             # ✅ Retorno / Pendências (EDITÁVEL na própria tabela)
-            # - primeira coluna com 🔴/🟢
+            # - SEM coluna separada
+            # - Status com bolinha no próprio campo
             # - Status e Obs editáveis
-            # - sem cor de linha
+            # - tudo centralizado (CSS global acima)
             # =========================================================
             st.markdown("##### Retorno / Pendências")
 
@@ -669,15 +712,17 @@ if page == f"📋 {dash_title}":
                 ret = ret.sort_values("om").reset_index(drop=True)
                 retorno_ids = ret["id"].astype(int).tolist()
 
+                # Status exibido com emoji no próprio texto
+                def to_display_status(s: str) -> str:
+                    s0 = (s or "Pendente").strip().title()
+                    if s0 not in STATUS_DISPLAY:
+                        s0 = "Pendente"
+                    return STATUS_DISPLAY[s0]
+
                 edit_df = pd.DataFrame(
                     {
-                        "": ret["status"].fillna("Pendente").apply(
-                            lambda s: "🟢" if str(s).strip().lower() == "respondido" else "🔴"
-                        ),
                         "Responsável": ret["om"].fillna("").astype(str),
-                        "Status": ret["status"].fillna("Pendente").astype(str).apply(
-                            lambda s: "Respondido" if str(s).strip().lower() == "respondido" else "Pendente"
-                        ),
+                        "Status": ret["status"].fillna("Pendente").astype(str).apply(to_display_status),
                         "Obs": ret["observacoes"].fillna("").astype(str),
                     }
                 )
@@ -689,17 +734,16 @@ if page == f"📋 {dash_title}":
                     hide_index=True,
                     key=editor_key,
                     column_config={
-                        "": st.column_config.TextColumn("", width="small", disabled=True),
                         "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
                         "Status": st.column_config.SelectboxColumn(
                             "Status",
-                            options=RETORNO_STATUS,
+                            options=[STATUS_DISPLAY["Pendente"], STATUS_DISPLAY["Respondido"]],
                             required=True,
                             width="medium",
                         ),
                         "Obs": st.column_config.TextColumn("Obs", width="large"),
                     },
-                    disabled=["", "Responsável"],
+                    disabled=["Responsável"],
                 )
 
                 c1, c2 = st.columns([0.22, 0.78])
@@ -714,8 +758,10 @@ if page == f"📋 {dash_title}":
                         if st.button("Confirmar", key=f"btn_confirm_save_ret_{selected_id}"):
                             for i, row in edited.reset_index(drop=True).iterrows():
                                 rid = retorno_ids[i]
-                                new_status = (row.get("Status") or "Pendente").strip()
+                                disp = (row.get("Status") or STATUS_DISPLAY["Pendente"]).strip()
+                                new_status = DISPLAY_TO_STATUS.get(disp, "Pendente")
                                 new_obs = (row.get("Obs") or "").strip() or None
+
                                 _sb_table("retornos_om").update(
                                     {"status": new_status, "observacoes": new_obs}
                                 ).eq("id", int(rid)).execute()
