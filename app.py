@@ -162,7 +162,6 @@ def sidebar_layout() -> tuple[str, str]:
             st.markdown(f"**👤 {user.email}**")
 
         st.markdown("---")
-        # "Nome do Dashboard" -> "Nome"
         st.text_input(
             "Nome",
             key="dash_name",
@@ -433,26 +432,6 @@ def _row_style_acompanhamento(row):
     return [""] * len(row)
 
 
-# =========================================================
-# ✅ ÚNICA CORREÇÃO PEDIDA: Status com emoji na tabela Pendências
-# =========================================================
-def _status_emoji(status: str | None) -> str:
-    s = (status or "").strip().lower()
-    if s == "respondido":
-        return "🟩 Respondido"
-    return "🟥 Pendente"
-
-
-def _row_style_retornos_only(row):
-    # ainda colore a linha (verde/vermelho) com base no texto do Status
-    s = str(row.get("Status", "")).strip().lower()
-    if "respondido" in s:
-        return ["background-color: #dcfce7; color: #14532d;"] * len(row)
-    if "pendente" in s:
-        return ["background-color: #fee2e2; color: #7f1d1d;"] * len(row)
-    return [""] * len(row)
-
-
 def _parse_caso_id_from_label(label: str) -> int | None:
     if "(ID " not in label:
         return None
@@ -676,23 +655,78 @@ if page == f"📋 {dash_title}":
                 st.session_state.setdefault(msg_key, build_msg_cobranca(caso, ret))
                 st.text_area("Mensagem", key=msg_key, height=200, label_visibility="collapsed")
 
-            # ✅ ÚNICA TABELA Retorno/Pendências com emoji no Status
+            # =========================================================
+            # ✅ Retorno / Pendências (EDITÁVEL na própria tabela)
+            # - primeira coluna com 🔴/🟢
+            # - Status e Obs editáveis
+            # - sem cor de linha
+            # =========================================================
             st.markdown("##### Retorno / Pendências")
+
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
             else:
-                view_df = pd.DataFrame(
+                ret = ret.sort_values("om").reset_index(drop=True)
+                retorno_ids = ret["id"].astype(int).tolist()
+
+                edit_df = pd.DataFrame(
                     {
+                        "": ret["status"].fillna("Pendente").apply(
+                            lambda s: "🟢" if str(s).strip().lower() == "respondido" else "🔴"
+                        ),
                         "Responsável": ret["om"].fillna("").astype(str),
-                        "Status": ret["status"].apply(_status_emoji),
+                        "Status": ret["status"].fillna("Pendente").astype(str).apply(
+                            lambda s: "Respondido" if str(s).strip().lower() == "respondido" else "Pendente"
+                        ),
                         "Obs": ret["observacoes"].fillna("").astype(str),
                     }
                 )
-                st.dataframe(
-                    view_df.style.apply(_row_style_retornos_only, axis=1),
+
+                editor_key = f"ret_editor_{selected_id}"
+                edited = st.data_editor(
+                    edit_df,
                     use_container_width=True,
                     hide_index=True,
+                    key=editor_key,
+                    column_config={
+                        "": st.column_config.TextColumn("", width="small", disabled=True),
+                        "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
+                        "Status": st.column_config.SelectboxColumn(
+                            "Status",
+                            options=RETORNO_STATUS,
+                            required=True,
+                            width="medium",
+                        ),
+                        "Obs": st.column_config.TextColumn("Obs", width="large"),
+                    },
+                    disabled=["", "Responsável"],
                 )
+
+                c1, c2 = st.columns([0.22, 0.78])
+                with c1:
+                    if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}"):
+                        st.session_state[f"confirm_save_ret_{selected_id}"] = True
+
+                if st.session_state.get(f"confirm_save_ret_{selected_id}"):
+                    st.warning("Confirma salvar as alterações em Retorno / Pendências?")
+                    cc1, cc2 = st.columns([0.22, 0.78])
+                    with cc1:
+                        if st.button("Confirmar", key=f"btn_confirm_save_ret_{selected_id}"):
+                            for i, row in edited.reset_index(drop=True).iterrows():
+                                rid = retorno_ids[i]
+                                new_status = (row.get("Status") or "Pendente").strip()
+                                new_obs = (row.get("Obs") or "").strip() or None
+                                _sb_table("retornos_om").update(
+                                    {"status": new_status, "observacoes": new_obs}
+                                ).eq("id", int(rid)).execute()
+
+                            st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                            st.toast("Alterações salvas ✅")
+                            st.rerun()
+                    with cc2:
+                        if st.button("Cancelar", key=f"btn_cancel_save_ret_{selected_id}"):
+                            st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                            st.info("Salvamento cancelado.")
 
 
 # =========================================================
