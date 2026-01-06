@@ -248,16 +248,7 @@ def fetch_casos() -> pd.DataFrame:
 
 
 def fetch_caso(caso_id: int) -> dict | None:
-    res = _sb_table("casos").select("*").eq("id", caso_id).limit(1).execute()
-    data = res.data or []
-    return data[0] if data else None
-
-
-def fetch_caso_by_nr_recebido(nr_doc_recebido: str) -> dict | None:
-    nr = (nr_doc_recebido or "").strip()
-    if not nr:
-        return None
-    res = _sb_table("casos").select("*").eq("nr_doc_recebido", nr).order("id", desc=True).limit(1).execute()
+    res = _sb_table("casos").select("*").eq("id", int(caso_id)).limit(1).execute()
     data = res.data or []
     return data[0] if data else None
 
@@ -302,7 +293,7 @@ def insert_solicitacao_sem_documento(assunto_solic: str, prazo_om: date | None, 
 
 
 def fetch_retornos(caso_id: int) -> pd.DataFrame:
-    res = _sb_table("retornos_om").select("*").eq("caso_id", caso_id).order("om").execute()
+    res = _sb_table("retornos_om").select("*").eq("caso_id", int(caso_id)).order("om").execute()
     return pd.DataFrame(res.data or [])
 
 
@@ -348,10 +339,6 @@ def fetch_arquivados_casos() -> pd.DataFrame:
     if df.empty:
         return df
     return df.sort_values("id", ascending=False)
-
-
-def _normalize_name(s: str) -> str:
-    return (s or "").replace("\u00A0", " ").strip()
 
 
 def get_master_oms() -> list[str]:
@@ -439,20 +426,43 @@ def _row_style_acompanhamento(row):
     return [""] * len(row)
 
 
-def _clear_doc_box():
-    st.session_state["doc_nr"] = ""
-    st.session_state["doc_assunto_doc"] = ""
-    st.session_state["doc_origem"] = ""
-    st.session_state["doc_prazo_final"] = None
-    st.session_state["doc_obs"] = ""
-    st.session_state["sol_assunto_solic"] = ""
-    st.session_state["sol_prazo_om"] = None
-    st.session_state["sol_doc_solicitado"] = ""
-    st.session_state["sol_responsaveis"] = []
-    st.session_state["resp_nr_doc_resposta"] = ""
+DOC_KEYS = [
+    "doc_nr",
+    "doc_assunto_doc",
+    "doc_origem",
+    "doc_prazo_final",
+    "doc_obs",
+    "sol_assunto_solic",
+    "sol_prazo_om",
+    "sol_doc_solicitado",
+    "sol_responsaveis",
+    "resp_nr_doc_resposta",
+]
 
 
-def _load_selected_into_doc_box(caso_id: int):
+def _request_clear_doc_box():
+    st.session_state["__clear_doc_box__"] = True
+
+
+def _apply_clear_doc_box():
+    # roda ANTES dos widgets existirem
+    for k in DOC_KEYS:
+        st.session_state.pop(k, None)
+    # defaults limpos
+    st.session_state.setdefault("doc_nr", "")
+    st.session_state.setdefault("doc_assunto_doc", "")
+    st.session_state.setdefault("doc_origem", "")
+    st.session_state.setdefault("doc_prazo_final", None)
+    st.session_state.setdefault("doc_obs", "")
+    st.session_state.setdefault("sol_assunto_solic", "")
+    st.session_state.setdefault("sol_prazo_om", None)
+    st.session_state.setdefault("sol_doc_solicitado", "")
+    st.session_state.setdefault("sol_responsaveis", [])
+    st.session_state.setdefault("resp_nr_doc_resposta", "")
+
+
+def _apply_load_selected_into_doc_box(caso_id: int):
+    # roda ANTES dos widgets existirem
     caso = fetch_caso(int(caso_id)) or {}
     st.session_state["doc_nr"] = caso.get("nr_doc_recebido") or ""
     st.session_state["doc_assunto_doc"] = caso.get("assunto_doc") or ""
@@ -463,14 +473,10 @@ def _load_selected_into_doc_box(caso_id: int):
     st.session_state["sol_assunto_solic"] = caso.get("assunto_solic") or ""
     st.session_state["sol_prazo_om"] = pd.to_datetime(caso["prazo_om"]).date() if caso.get("prazo_om") else None
     st.session_state["sol_doc_solicitado"] = caso.get("nr_doc_solicitado") or ""
-
     st.session_state["resp_nr_doc_resposta"] = caso.get("nr_doc_resposta") or ""
 
     ret = fetch_retornos(int(caso_id))
-    if not ret.empty:
-        st.session_state["sol_responsaveis"] = ret["om"].fillna("").astype(str).tolist()
-    else:
-        st.session_state["sol_responsaveis"] = []
+    st.session_state["sol_responsaveis"] = ret["om"].fillna("").astype(str).tolist() if not ret.empty else []
 
 
 def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
@@ -510,16 +516,26 @@ def _snapshot_from_editor(edited_df: pd.DataFrame) -> list[tuple[str, str]]:
 require_auth()
 page, dash_title = sidebar_layout()
 
-st.session_state.setdefault("doc_nr", "")
-st.session_state.setdefault("doc_assunto_doc", "")
-st.session_state.setdefault("doc_origem", "")
-st.session_state.setdefault("doc_prazo_final", None)
-st.session_state.setdefault("doc_obs", "")
-st.session_state.setdefault("sol_assunto_solic", "")
-st.session_state.setdefault("sol_prazo_om", None)
-st.session_state.setdefault("sol_doc_solicitado", "")
-st.session_state.setdefault("sol_responsaveis", [])
-st.session_state.setdefault("resp_nr_doc_resposta", "")
+# estados principais
+st.session_state.setdefault("current_selected_id", None)
+st.session_state.setdefault("pending_select_id", None)
+st.session_state.setdefault("__clear_doc_box__", False)
+
+# defaults (se ainda não existem)
+_apply_clear_doc_box()
+
+# ✅ aplica CLEAR antes dos widgets
+if st.session_state.pop("__clear_doc_box__", False):
+    _apply_clear_doc_box()
+    st.session_state["current_selected_id"] = None
+    st.session_state["pending_select_id"] = None
+
+# ✅ aplica LOAD antes dos widgets
+pending = st.session_state.get("pending_select_id")
+if pending is not None:
+    st.session_state["current_selected_id"] = int(pending)
+    _apply_load_selected_into_doc_box(int(pending))
+    st.session_state["pending_select_id"] = None
 
 
 # =========================================================
@@ -594,7 +610,6 @@ if page == f"📋 {dash_title}":
             st.text_input("Nr (Resposta)", key="resp_nr_doc_resposta")
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            # botão único
             if st.button("Salvar", type="primary", key="btn_save_all", use_container_width=True):
                 sel_id = st.session_state.get("current_selected_id")
 
@@ -612,7 +627,6 @@ if page == f"📋 {dash_title}":
                 nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
 
                 try:
-                    # 1) Se existe item selecionado: atualiza por ID
                     if sel_id:
                         update_payload = {
                             "nr_doc_recebido": nr_doc or None,
@@ -623,7 +637,6 @@ if page == f"📋 {dash_title}":
                         }
                         update_caso_by_id(int(sel_id), update_payload)
 
-                        # Solicitação/Responsáveis (se tiver algo preenchido)
                         if assunto_solic or nr_solic or prazo_om or responsaveis:
                             salvar_ou_atualizar_solicitacao(
                                 caso_id=int(sel_id),
@@ -633,13 +646,11 @@ if page == f"📋 {dash_title}":
                                 nr_doc_solicitado=nr_solic or "00",
                             )
 
-                        # Resposta (sempre aplica)
                         set_resposta_e_status(int(sel_id), nr_resp)
 
                         st.toast("Atualizado ✅")
                         st.rerun()
 
-                    # 2) Se NÃO tem selecionado: cria novo (documento ou solicitação sem documento)
                     else:
                         if nr_doc and assunto_doc:
                             new_id = insert_documento(
@@ -649,7 +660,6 @@ if page == f"📋 {dash_title}":
                                 prazo_final=prazo_final,
                                 obs=obs_doc,
                             )
-                            # se já tiver solicitação/responsáveis, aplica no novo
                             if assunto_solic or nr_solic or prazo_om or responsaveis:
                                 salvar_ou_atualizar_solicitacao(
                                     caso_id=int(new_id),
@@ -660,7 +670,7 @@ if page == f"📋 {dash_title}":
                                 )
                             set_resposta_e_status(int(new_id), nr_resp)
 
-                            st.session_state["current_selected_id"] = int(new_id)
+                            st.session_state["pending_select_id"] = int(new_id)
                             st.toast("Salvo ✅")
                             st.rerun()
 
@@ -680,7 +690,7 @@ if page == f"📋 {dash_title}":
                                 )
                             set_resposta_e_status(int(new_id), nr_resp)
 
-                            st.session_state["current_selected_id"] = int(new_id)
+                            st.session_state["pending_select_id"] = int(new_id)
                             st.toast("Salvo ✅")
                             st.rerun()
                         else:
@@ -690,8 +700,7 @@ if page == f"📋 {dash_title}":
                     st.error(f"Erro ao salvar: {e}")
 
             if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
-                st.session_state["current_selected_id"] = None
-                _clear_doc_box()
+                _request_clear_doc_box()
                 st.rerun()
 
     # =========================
@@ -742,29 +751,22 @@ if page == f"📋 {dash_title}":
             idx = sel["selection"]["rows"][0]
             clicked_id = int(df_show.iloc[idx]["Id"])
 
-        st.session_state.setdefault("current_selected_id", None)
-        st.session_state.setdefault("last_loaded_id", None)
-        if clicked_id is not None:
-            st.session_state["current_selected_id"] = clicked_id
+        current_id = st.session_state.get("current_selected_id")
+        if clicked_id is not None and clicked_id != current_id:
+            # ✅ carrega na próxima execução (antes dos widgets)
+            st.session_state["pending_select_id"] = int(clicked_id)
+            st.rerun()
 
         selected_id = st.session_state.get("current_selected_id")
-
-        # ao selecionar, carrega os valores nas caixas (Documento)
-        if selected_id and st.session_state.get("last_loaded_id") != selected_id:
-            _load_selected_into_doc_box(int(selected_id))
-            st.session_state["last_loaded_id"] = selected_id
 
         if btn_arquivar and selected_id:
             archive_caso(int(selected_id))
             st.toast("Arquivado ✅")
-            st.session_state["current_selected_id"] = None
-            st.session_state["last_loaded_id"] = None
-            _clear_doc_box()
+            _request_clear_doc_box()
             st.rerun()
         elif btn_arquivar and not selected_id:
             st.warning("Selecione uma linha na tabela.")
 
-        # Mensagem + Responsável (mantidos)
         if selected_id:
             caso = fetch_caso(int(selected_id)) or {}
             ret = fetch_retornos(int(selected_id))
@@ -855,7 +857,7 @@ if page == f"📋 {dash_title}":
 # =========================================================
 elif page == "📄 Documento":
     st.title("📄 Documento")
-    st.info("A edição principal está no Dashboard (caixa **Documento**). Esta aba pode ser removida depois, se quiser.")
+    st.info("A edição principal está no Dashboard (caixa **Documento**).")
 
 
 # =========================================================
