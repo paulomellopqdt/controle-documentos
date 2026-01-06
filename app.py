@@ -74,6 +74,15 @@ hr { border-color: rgba(49,51,63,0.10); }
 
 /* Separador vertical no Documento */
 .vline { height: 100%; border-left: 2px solid rgba(49,51,63,0.10); margin: 0 auto; }
+
+/* Badge (pendente/salvo) */
+.badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 6px 10px; border-radius: 999px;
+  font-size: 0.85rem; border:1px solid rgba(49,51,63,0.12);
+}
+.badge-warn{ background: rgba(234,179,8,0.14); color: #854d0e; }
+.badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -106,7 +115,6 @@ def _sb_table(name: str):
 
 
 def _auth_set_session_from_state():
-    """Garante que o client auth está com a sessão atual (pra update_user persistir)."""
     sb = get_supabase()
     sess = st.session_state.get("sb_session")
     if not sess:
@@ -167,8 +175,6 @@ def require_auth():
                 res = sb.auth.sign_in_with_password({"email": email, "password": password})
                 st.session_state["sb_session"] = res.session
                 st.session_state["sb_user"] = res.user
-
-                # carrega nome salvo do usuário
                 st.session_state["dash_name"] = load_dash_name_from_user()
                 st.rerun()
             except Exception:
@@ -190,12 +196,10 @@ def require_auth():
 
 
 def _on_change_dash_name():
-    # salva no Supabase Auth (persistente por usuário)
     save_dash_name_to_user(st.session_state.get("dash_name", "Dashboard"))
 
 
 def sidebar_layout() -> tuple[str, str]:
-    # garante que existe e vem do perfil
     st.session_state.setdefault("dash_name", load_dash_name_from_user())
 
     with st.sidebar:
@@ -437,6 +441,9 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
+# =========================================================
+# Helpers
+# =========================================================
 def _fmt_date_iso_to_ddmmyyyy(v):
     if not v:
         return "-"
@@ -556,6 +563,21 @@ def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     )
 
 
+def _normalize_editor_row(status_display: str, obs: str) -> tuple[str, str]:
+    disp = (status_display or STATUS_DISPLAY["Pendente"]).strip()
+    status = DISPLAY_TO_STATUS.get(disp, "Pendente")
+    obs_n = (obs or "").strip()
+    return status, obs_n
+
+
+def _snapshot_from_editor(edited_df: pd.DataFrame) -> list[tuple[str, str]]:
+    snap: list[tuple[str, str]] = []
+    for _, r in edited_df.iterrows():
+        s, o = _normalize_editor_row(r.get("Status", ""), r.get("Obs", ""))
+        snap.append((s, o))
+    return snap
+
+
 # =========================================================
 # APP START
 # =========================================================
@@ -653,14 +675,32 @@ if page == f"📋 {dash_title}":
             key="tbl_dash",
         )
 
-        selected_id = None
+        clicked_id = None
         if sel and sel.get("selection", {}).get("rows"):
             idx = sel["selection"]["rows"][0]
-            selected_id = int(df_show.iloc[idx]["id"])
+            clicked_id = int(df_show.iloc[idx]["id"])
+
+        # =========================
+        # Fluxo fechado: se tem edição pendente no Retorno/Pendências,
+        # não troca o selecionado.
+        # =========================
+        st.session_state.setdefault("current_selected_id", None)
+        st.session_state.setdefault("ret_dirty_for_selected", False)
+
+        if clicked_id is not None:
+            if st.session_state["current_selected_id"] is None:
+                st.session_state["current_selected_id"] = clicked_id
+            elif clicked_id != st.session_state["current_selected_id"] and st.session_state.get("ret_dirty_for_selected"):
+                st.warning("Você tem alterações não salvas em **Retorno / Pendências**. Salve antes de trocar o item.")
+            else:
+                st.session_state["current_selected_id"] = clicked_id
+
+        selected_id = st.session_state.get("current_selected_id")
 
         if btn_arquivar and selected_id:
             archive_caso(selected_id)
             st.toast("Arquivado ✅")
+            st.session_state["current_selected_id"] = None
             st.rerun()
         elif btn_arquivar and not selected_id:
             st.warning("Selecione uma linha na tabela.")
@@ -698,28 +738,24 @@ if page == f"📋 {dash_title}":
                 st.text_area("Mensagem", key=msg_key, height=200, label_visibility="collapsed")
 
             # =========================================================
-            # ✅ Retorno / Pendências (EDITÁVEL na própria tabela)
-            # - SEM coluna separada
-            # - Status com bolinha no próprio campo
-            # - Status e Obs editáveis
-            # - tudo centralizado (CSS global acima)
+            # Retorno / Pendências (EDITÁVEL) + Detecção de Alterações
             # =========================================================
             st.markdown("##### Retorno / Pendências")
 
             if ret.empty:
                 st.info("Sem responsáveis cadastrados.")
+                st.session_state["ret_dirty_for_selected"] = False
             else:
                 ret = ret.sort_values("om").reset_index(drop=True)
                 retorno_ids = ret["id"].astype(int).tolist()
 
-                # Status exibido com emoji no próprio texto
                 def to_display_status(s: str) -> str:
                     s0 = (s or "Pendente").strip().title()
                     if s0 not in STATUS_DISPLAY:
                         s0 = "Pendente"
                     return STATUS_DISPLAY[s0]
 
-                edit_df = pd.DataFrame(
+                base_df = pd.DataFrame(
                     {
                         "Responsável": ret["om"].fillna("").astype(str),
                         "Status": ret["status"].fillna("Pendente").astype(str).apply(to_display_status),
@@ -727,9 +763,14 @@ if page == f"📋 {dash_title}":
                     }
                 )
 
+                # snapshot original (do banco) p/ comparar
+                orig_key = f"ret_original_snapshot_{selected_id}"
+                if orig_key not in st.session_state:
+                    st.session_state[orig_key] = _snapshot_from_editor(base_df)
+
                 editor_key = f"ret_editor_{selected_id}"
                 edited = st.data_editor(
-                    edit_df,
+                    base_df,
                     use_container_width=True,
                     hide_index=True,
                     key=editor_key,
@@ -746,10 +787,23 @@ if page == f"📋 {dash_title}":
                     disabled=["Responsável"],
                 )
 
-                c1, c2 = st.columns([0.22, 0.78])
-                with c1:
-                    if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}"):
-                        st.session_state[f"confirm_save_ret_{selected_id}"] = True
+                current_snap = _snapshot_from_editor(edited)
+                dirty = current_snap != st.session_state.get(orig_key, [])
+                st.session_state["ret_dirty_for_selected"] = bool(dirty)
+
+                # indicador + botão salvar
+                a1, a2 = st.columns([0.55, 0.45])
+                with a1:
+                    if dirty:
+                        st.markdown('<span class="badge badge-warn">⚠️ Alterações pendentes</span>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<span class="badge badge-ok">✅ Tudo salvo</span>', unsafe_allow_html=True)
+
+                with a2:
+                    # só mostra salvar quando tem mudança (mais “fechado”)
+                    if dirty:
+                        if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}"):
+                            st.session_state[f"confirm_save_ret_{selected_id}"] = True
 
                 if st.session_state.get(f"confirm_save_ret_{selected_id}"):
                     st.warning("Confirma salvar as alterações em Retorno / Pendências?")
@@ -766,7 +820,11 @@ if page == f"📋 {dash_title}":
                                     {"status": new_status, "observacoes": new_obs}
                                 ).eq("id", int(rid)).execute()
 
+                            # Atualiza snapshot + limpa confirmação
+                            st.session_state[orig_key] = _snapshot_from_editor(edited)
                             st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                            st.session_state["ret_dirty_for_selected"] = False
+
                             st.toast("Alterações salvas ✅")
                             st.rerun()
                     with cc2:
