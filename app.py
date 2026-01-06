@@ -23,7 +23,6 @@ st.markdown(
 .block-container { padding-top: 1.9rem; padding-bottom: 2rem; max-width: 1400px; }
 h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.25rem; }
 .small-muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
-h1 span, h2 span, h3 span { display: inline-block; padding-top: 2px; }
 
 /* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] { border-right: 1px solid rgba(49,51,63,0.10); }
@@ -83,6 +82,9 @@ hr { border-color: rgba(49,51,63,0.10); }
 }
 .badge-warn{ background: rgba(234,179,8,0.14); color: #854d0e; }
 .badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
+
+/* Top actions row */
+.actions-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -563,18 +565,13 @@ def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     )
 
 
-def _normalize_editor_row(status_display: str, obs: str) -> tuple[str, str]:
-    disp = (status_display or STATUS_DISPLAY["Pendente"]).strip()
-    status = DISPLAY_TO_STATUS.get(disp, "Pendente")
-    obs_n = (obs or "").strip()
-    return status, obs_n
-
-
 def _snapshot_from_editor(edited_df: pd.DataFrame) -> list[tuple[str, str]]:
     snap: list[tuple[str, str]] = []
     for _, r in edited_df.iterrows():
-        s, o = _normalize_editor_row(r.get("Status", ""), r.get("Obs", ""))
-        snap.append((s, o))
+        disp = (r.get("Status", "") or STATUS_DISPLAY["Pendente"]).strip()
+        status = DISPLAY_TO_STATUS.get(disp, "Pendente")
+        obs = (r.get("Obs", "") or "").strip()
+        snap.append((status, obs))
     return snap
 
 
@@ -619,43 +616,28 @@ if page == f"📋 {dash_title}":
     k4.metric("Hoje", hoje.strftime("%d/%m/%Y"))
     st.divider()
 
-    f1, f2, f3 = st.columns([1.2, 0.9, 0.9])
-    with f1:
-        q = st.text_input("🔎 Buscar", placeholder="Nr / assunto / origem / solicitação...")
-    with f2:
-        status_filter = st.selectbox("Status", ["Todos", "Pendente", "Distribuído", "Recebido", "Resolvido"])
-    with f3:
-        only_pend = st.toggle("Somente com pendências", value=False)
-
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
         pend_map = {int(r["caso_id"]): int(r["qtd"]) for _, r in pend.iterrows()} if not pend.empty else {}
         df_acomp["Pendências (Qtd)"] = df_acomp["id"].astype(int).map(lambda x: pend_map.get(int(x), 0))
 
+        # ✅ ORDEM DAS COLUNAS (como você pediu)
         df_show = pd.DataFrame(
             {
-                "id": df_acomp["id"],
+                "Id": df_acomp["id"].astype(int),
+                "Origem": df_acomp.get("origem").fillna("-"),
                 "Nr Doc (Recebido)": df_acomp["nr_doc_recebido"].fillna("-"),
                 "Assunto (Documento)": df_acomp["assunto_doc"].fillna("-"),
-                "Assunto (Solicitação)": df_acomp.get("assunto_solic").fillna("-"),
-                "Origem": df_acomp.get("origem").fillna("-"),
                 "Prazo Final": pd.to_datetime(df_acomp.get("prazo_final"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
-                "Prazo OM": pd.to_datetime(df_acomp.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Nr Doc (Solicitado)": df_acomp.get("nr_doc_solicitado").fillna("-"),
-                "Nr Doc (Resposta)": df_acomp.get("nr_doc_resposta").fillna("-"),
-                "Status": df_acomp.get("status").fillna("-"),
+                "Assunto (Solicitação)": df_acomp.get("assunto_solic").fillna("-"),
+                "Prazo OM": pd.to_datetime(df_acomp.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Pendências (Qtd)": df_acomp["Pendências (Qtd)"],
+                "Status": df_acomp.get("status").fillna("-"),
+                "Nr Doc (Resposta)": df_acomp.get("nr_doc_resposta").fillna("-"),
             }
         )
-
-        if status_filter != "Todos":
-            df_show = df_show[df_show["Status"].astype(str).str.lower() == status_filter.lower()]
-        if only_pend:
-            df_show = df_show[df_show["Pendências (Qtd)"] > 0]
-        if q and not df_show.empty:
-            ql = q.lower().strip()
-            df_show = df_show[df_show.apply(lambda r: ql in " ".join(map(str, r.values)).lower(), axis=1)]
 
         topL, topR = st.columns([1, 0.22])
         with topL:
@@ -678,11 +660,10 @@ if page == f"📋 {dash_title}":
         clicked_id = None
         if sel and sel.get("selection", {}).get("rows"):
             idx = sel["selection"]["rows"][0]
-            clicked_id = int(df_show.iloc[idx]["id"])
+            clicked_id = int(df_show.iloc[idx]["Id"])
 
         # =========================
-        # Fluxo fechado: se tem edição pendente no Retorno/Pendências,
-        # não troca o selecionado.
+        # Bloqueio de troca quando há edição pendente em Responsável
         # =========================
         st.session_state.setdefault("current_selected_id", None)
         st.session_state.setdefault("ret_dirty_for_selected", False)
@@ -691,7 +672,7 @@ if page == f"📋 {dash_title}":
             if st.session_state["current_selected_id"] is None:
                 st.session_state["current_selected_id"] = clicked_id
             elif clicked_id != st.session_state["current_selected_id"] and st.session_state.get("ret_dirty_for_selected"):
-                st.warning("Você tem alterações não salvas em **Retorno / Pendências**. Salve antes de trocar o item.")
+                st.warning("Você tem alterações não salvas em **Responsável**. Salve antes de trocar o item.")
             else:
                 st.session_state["current_selected_id"] = clicked_id
 
@@ -738,99 +719,95 @@ if page == f"📋 {dash_title}":
                 st.text_area("Mensagem", key=msg_key, height=200, label_visibility="collapsed")
 
             # =========================================================
-            # Retorno / Pendências (EDITÁVEL) + Detecção de Alterações
+            # ✅ Responsável (Retorno / Pendências) — em caixa igual Detalhes
+            # + Ações (status/botões) em cima
             # =========================================================
-            st.markdown("##### Retorno / Pendências")
+            with st.expander("Responsável", expanded=True):
+                if ret.empty:
+                    st.info("Sem responsáveis cadastrados.")
+                    st.session_state["ret_dirty_for_selected"] = False
+                else:
+                    ret = ret.sort_values("om").reset_index(drop=True)
+                    retorno_ids = ret["id"].astype(int).tolist()
 
-            if ret.empty:
-                st.info("Sem responsáveis cadastrados.")
-                st.session_state["ret_dirty_for_selected"] = False
-            else:
-                ret = ret.sort_values("om").reset_index(drop=True)
-                retorno_ids = ret["id"].astype(int).tolist()
+                    def to_display_status(s: str) -> str:
+                        s0 = (s or "Pendente").strip().title()
+                        if s0 not in STATUS_DISPLAY:
+                            s0 = "Pendente"
+                        return STATUS_DISPLAY[s0]
 
-                def to_display_status(s: str) -> str:
-                    s0 = (s or "Pendente").strip().title()
-                    if s0 not in STATUS_DISPLAY:
-                        s0 = "Pendente"
-                    return STATUS_DISPLAY[s0]
+                    base_df = pd.DataFrame(
+                        {
+                            "Responsável": ret["om"].fillna("").astype(str),
+                            "Status": ret["status"].fillna("Pendente").astype(str).apply(to_display_status),
+                            "Obs": ret["observacoes"].fillna("").astype(str),
+                        }
+                    )
 
-                base_df = pd.DataFrame(
-                    {
-                        "Responsável": ret["om"].fillna("").astype(str),
-                        "Status": ret["status"].fillna("Pendente").astype(str).apply(to_display_status),
-                        "Obs": ret["observacoes"].fillna("").astype(str),
-                    }
-                )
+                    # snapshot original (do banco)
+                    orig_key = f"ret_original_snapshot_{selected_id}"
+                    if orig_key not in st.session_state:
+                        st.session_state[orig_key] = _snapshot_from_editor(base_df)
 
-                # snapshot original (do banco) p/ comparar
-                orig_key = f"ret_original_snapshot_{selected_id}"
-                if orig_key not in st.session_state:
-                    st.session_state[orig_key] = _snapshot_from_editor(base_df)
+                    editor_key = f"ret_editor_{selected_id}"
+                    edited = st.data_editor(
+                        base_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        key=editor_key,
+                        column_config={
+                            "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
+                            "Status": st.column_config.SelectboxColumn(
+                                "Status",
+                                options=[STATUS_DISPLAY["Pendente"], STATUS_DISPLAY["Respondido"]],
+                                required=True,
+                                width="medium",
+                            ),
+                            "Obs": st.column_config.TextColumn("Obs", width="large"),
+                        },
+                        disabled=["Responsável"],
+                    )
 
-                editor_key = f"ret_editor_{selected_id}"
-                edited = st.data_editor(
-                    base_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    key=editor_key,
-                    column_config={
-                        "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
-                        "Status": st.column_config.SelectboxColumn(
-                            "Status",
-                            options=[STATUS_DISPLAY["Pendente"], STATUS_DISPLAY["Respondido"]],
-                            required=True,
-                            width="medium",
-                        ),
-                        "Obs": st.column_config.TextColumn("Obs", width="large"),
-                    },
-                    disabled=["Responsável"],
-                )
+                    current_snap = _snapshot_from_editor(edited)
+                    dirty = current_snap != st.session_state.get(orig_key, [])
+                    st.session_state["ret_dirty_for_selected"] = bool(dirty)
 
-                current_snap = _snapshot_from_editor(edited)
-                dirty = current_snap != st.session_state.get(orig_key, [])
-                st.session_state["ret_dirty_for_selected"] = bool(dirty)
+                    # AÇÕES EM CIMA (badge + salvar)
+                    a1, a2 = st.columns([0.6, 0.4], gap="small")
+                    with a1:
+                        if dirty:
+                            st.markdown('<span class="badge badge-warn">⚠️ Alterações pendentes</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<span class="badge badge-ok">✅ Tudo salvo</span>', unsafe_allow_html=True)
+                    with a2:
+                        if dirty:
+                            if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}", use_container_width=True):
+                                st.session_state[f"confirm_save_ret_{selected_id}"] = True
 
-                # indicador + botão salvar
-                a1, a2 = st.columns([0.55, 0.45])
-                with a1:
-                    if dirty:
-                        st.markdown('<span class="badge badge-warn">⚠️ Alterações pendentes</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="badge badge-ok">✅ Tudo salvo</span>', unsafe_allow_html=True)
+                    if st.session_state.get(f"confirm_save_ret_{selected_id}"):
+                        st.warning("Confirma salvar as alterações em Responsável?")
+                        cc1, cc2 = st.columns([0.22, 0.78], gap="small")
+                        with cc1:
+                            if st.button("Confirmar", key=f"btn_confirm_save_ret_{selected_id}"):
+                                for i, row in edited.reset_index(drop=True).iterrows():
+                                    rid = retorno_ids[i]
+                                    disp = (row.get("Status") or STATUS_DISPLAY["Pendente"]).strip()
+                                    new_status = DISPLAY_TO_STATUS.get(disp, "Pendente")
+                                    new_obs = (row.get("Obs") or "").strip() or None
 
-                with a2:
-                    # só mostra salvar quando tem mudança (mais “fechado”)
-                    if dirty:
-                        if st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}"):
-                            st.session_state[f"confirm_save_ret_{selected_id}"] = True
+                                    _sb_table("retornos_om").update(
+                                        {"status": new_status, "observacoes": new_obs}
+                                    ).eq("id", int(rid)).execute()
 
-                if st.session_state.get(f"confirm_save_ret_{selected_id}"):
-                    st.warning("Confirma salvar as alterações em Retorno / Pendências?")
-                    cc1, cc2 = st.columns([0.22, 0.78])
-                    with cc1:
-                        if st.button("Confirmar", key=f"btn_confirm_save_ret_{selected_id}"):
-                            for i, row in edited.reset_index(drop=True).iterrows():
-                                rid = retorno_ids[i]
-                                disp = (row.get("Status") or STATUS_DISPLAY["Pendente"]).strip()
-                                new_status = DISPLAY_TO_STATUS.get(disp, "Pendente")
-                                new_obs = (row.get("Obs") or "").strip() or None
-
-                                _sb_table("retornos_om").update(
-                                    {"status": new_status, "observacoes": new_obs}
-                                ).eq("id", int(rid)).execute()
-
-                            # Atualiza snapshot + limpa confirmação
-                            st.session_state[orig_key] = _snapshot_from_editor(edited)
-                            st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
-                            st.session_state["ret_dirty_for_selected"] = False
-
-                            st.toast("Alterações salvas ✅")
-                            st.rerun()
-                    with cc2:
-                        if st.button("Cancelar", key=f"btn_cancel_save_ret_{selected_id}"):
-                            st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
-                            st.info("Salvamento cancelado.")
+                                st.session_state[orig_key] = _snapshot_from_editor(edited)
+                                st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                                st.session_state["ret_dirty_for_selected"] = False
+                                st.toast("Alterações salvas ✅")
+                                st.rerun()
+                        with cc2:
+                            if st.button("Cancelar", key=f"btn_cancel_save_ret_{selected_id}"):
+                                st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                                st.info("Salvamento cancelado.")
 
 
 # =========================================================
