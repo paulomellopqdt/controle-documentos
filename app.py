@@ -6,6 +6,7 @@ import urllib.parse
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 from supabase import Client, create_client
 
 
@@ -86,6 +87,14 @@ hr { border-color: rgba(49,51,63,0.10); }
 .badge-warn{ background: rgba(234,179,8,0.14); color: #854d0e; }
 .badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
 
+/* Card container */
+.card {
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 16px;
+  padding: 14px 14px;
+  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.04);
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -395,7 +404,6 @@ def delete_master_oms(nomes: list[str]):
     for n in nomes:
         _sb_table("master_oms").delete().eq("nome", n).execute()
         _sb_table("retornos_om").delete().eq("om", n).execute()
-        # contatos (se existir)
         try:
             _sb_table("responsaveis_contatos").delete().eq("responsavel", n).execute()
         except Exception:
@@ -410,12 +418,10 @@ def fetch_contatos_responsaveis() -> pd.DataFrame:
     """
     try:
         q = _sb_table("responsaveis_contatos").select("*")
-        # tenta ordenar; se a coluna não existir / RLS bloquear, cai no except abaixo
         try:
             q = q.order("responsavel", desc=False).order("contato_nome", desc=False)
         except Exception:
             pass
-
         res = q.execute()
         return pd.DataFrame(res.data or [])
     except Exception as e:
@@ -424,7 +430,7 @@ def fetch_contatos_responsaveis() -> pd.DataFrame:
             "✅ Verifique se:\n"
             "- a tabela existe (schema public)\n"
             "- RLS/policies permitem SELECT\n"
-            "- colunas: responsavel, contato_nome, telefone\n\n"
+            "- colunas: responsavel, contato_nome, telefone, owner_id\n\n"
             f"Detalhe: {e}"
         )
         return pd.DataFrame(columns=["id", "responsavel", "contato_nome", "telefone"])
@@ -440,8 +446,6 @@ def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: st
         "created_at": datetime.now().isoformat(),
     }
     _sb_table("responsaveis_contatos").insert(payload).execute()
-
-
 
 
 def delete_contato_responsavel(contato_id: int):
@@ -549,11 +553,11 @@ def _request_clear_doc_box():
     st.session_state["__clear_doc_box__"] = True
 
 
-def _apply_clear_doc_box():
-    # roda ANTES dos widgets existirem
-    for k in DOC_KEYS:
-        st.session_state.pop(k, None)
-
+def _init_doc_box_defaults():
+    """
+    ✅ Correção do bug: NÃO pode ficar limpando os campos a cada rerun.
+    Esta função só garante defaults quando as chaves ainda não existem.
+    """
     st.session_state.setdefault("doc_nr", "")
     st.session_state.setdefault("doc_assunto_doc", "")
     st.session_state.setdefault("doc_origem", "")
@@ -567,8 +571,17 @@ def _apply_clear_doc_box():
     st.session_state.setdefault("resp_nr_doc_resposta", "")
 
 
+def _clear_doc_box_now():
+    """
+    Limpa de verdade (quando o usuário clica em Novo/Arquivar etc).
+    Deve rodar ANTES dos widgets existirem (no topo do script).
+    """
+    for k in DOC_KEYS:
+        st.session_state.pop(k, None)
+    _init_doc_box_defaults()
+
+
 def _apply_load_selected_into_doc_box(caso_id: int):
-    # roda ANTES dos widgets existirem
     caso = fetch_caso(int(caso_id)) or {}
 
     st.session_state["doc_nr"] = caso.get("nr_doc_recebido") or ""
@@ -623,13 +636,9 @@ def _digits_only_phone(s: str) -> str:
 
 
 def whatsapp_web_url(phone: str, text: str | None = None) -> str:
-    """
-    Use https://wa.me/55DDDNUM?text=...
-    """
     p = _digits_only_phone(phone)
     if not p:
         return "https://web.whatsapp.com/"
-    # se o usuário não colocar país, assume BR (55)
     if not p.startswith("55"):
         p = "55" + p
     base = f"https://wa.me/{p}"
@@ -649,12 +658,12 @@ st.session_state.setdefault("current_selected_id", None)
 st.session_state.setdefault("pending_select_id", None)
 st.session_state.setdefault("__clear_doc_box__", False)
 
-# defaults (se ainda não existem)
-_apply_clear_doc_box()
+# ✅ defaults (não limpa digitando)
+_init_doc_box_defaults()
 
 # ✅ aplica CLEAR antes dos widgets
 if st.session_state.pop("__clear_doc_box__", False):
-    _apply_clear_doc_box()
+    _clear_doc_box_now()
     st.session_state["current_selected_id"] = None
     st.session_state["pending_select_id"] = None
 
@@ -698,9 +707,6 @@ if page == f"📋 {dash_title}":
 
     # =========================================================
     # Documento (sempre FECHADA)
-    #  - Ao selecionar linha, preenche as caixas
-    #  - Salvar com linha selecionada: atualiza
-    #  - Salvar sem seleção: cria novo
     # =========================================================
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
@@ -759,7 +765,6 @@ if page == f"📋 {dash_title}":
 
                 try:
                     if sel_id:
-                        # ✅ mantém NOT NULL com "-"
                         update_payload = {
                             "nr_doc_recebido": nr_doc if nr_doc else "-",
                             "assunto_doc": assunto_doc if assunto_doc else "-",
@@ -779,12 +784,10 @@ if page == f"📋 {dash_title}":
                             )
 
                         set_resposta_e_status(int(sel_id), nr_resp)
-
                         st.toast("Atualizado ✅")
                         st.rerun()
 
                     else:
-                        # novo registro
                         if nr_doc and assunto_doc:
                             new_id = insert_documento(
                                 nr_doc=nr_doc,
@@ -861,7 +864,6 @@ if page == f"📋 {dash_title}":
         with topL:
             st.subheader("Acompanhamento")
         with topR:
-            # ➕ Novo (limpa seleção e caixas) — fora da caixa Documento
             if st.button("➕", key="btn_new_row", help="Novo (limpar seleção)"):
                 _request_clear_doc_box()
                 st.rerun()
@@ -886,7 +888,6 @@ if page == f"📋 {dash_title}":
 
         current_id = st.session_state.get("current_selected_id")
         if clicked_id is not None and clicked_id != current_id:
-            # ✅ carrega na próxima execução (antes dos widgets)
             st.session_state["pending_select_id"] = int(clicked_id)
             st.rerun()
 
@@ -987,152 +988,185 @@ if page == f"📋 {dash_title}":
 
 
 # =========================================================
-# PAGE: RESPONSÁVEL
-#   - cadastrar responsável (master_oms)
-#   - cadastrar múltiplos contatos (nome + telefone) por responsável
-#   - botão que abre WhatsApp Web
-#   - dashboard: pendências por responsável
+# PAGE: RESPONSÁVEL (mais profissional)
 # =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
-    st.markdown('<div class="small-muted">Cadastro de responsáveis, contatos e visão de pendências</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-muted">Cadastro, contatos e visão de pendências</div>', unsafe_allow_html=True)
     st.divider()
 
-    # -------- Dashboard: pendências por responsável --------
-    st.subheader("Pendências por responsável")
+    tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "👥 Responsáveis", "📇 Contatos"])
+
+    # -------- Dados base: pendências por responsável --------
     try:
         res = _sb_table("retornos_om").select("om,status").execute()
         d = pd.DataFrame(res.data or [])
     except Exception as e:
-        st.error(f"Erro ao carregar pendências: {e}")
         d = pd.DataFrame(columns=["om", "status"])
+        st.error(f"Erro ao carregar pendências: {e}")
 
-    if d.empty:
-        st.info("Sem dados de pendências.")
-    else:
-        d["status"] = d["status"].fillna("Pendente").astype(str)
-        d["om"] = d["om"].fillna("").astype(str)
-        d = d[d["om"].str.strip() != ""]
-        pend = d[d["status"].str.lower() == "pendente"]
-        agg = pend.groupby("om").size().reset_index(name="Pendentes").sort_values("Pendentes", ascending=False)
+    d["status"] = d.get("status", pd.Series([], dtype=str)).fillna("Pendente").astype(str)
+    d["om"] = d.get("om", pd.Series([], dtype=str)).fillna("").astype(str)
+    d = d[d["om"].str.strip() != ""]
+    pend = d[d["status"].str.lower() == "pendente"]
+    agg = pend.groupby("om").size().reset_index(name="Pendentes").sort_values("Pendentes", ascending=False)
 
-        c1, c2 = st.columns([1.2, 1.0], gap="large")
-        with c1:
+    with tab1:
+        st.markdown("### Visão geral")
+        total_resps = len(get_master_oms())
+        total_pend = int(agg["Pendentes"].sum()) if not agg.empty else 0
+        top_resp = "-"
+        top_pend = 0
+        if not agg.empty:
+            top_resp = str(agg.iloc[0]["om"])
+            top_pend = int(agg.iloc[0]["Pendentes"])
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Responsáveis cadastrados", total_resps)
+        m2.metric("Pendências (total)", total_pend)
+        m3.metric("Maior pendência", f"{top_resp} ({top_pend})")
+
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("#### Pendências por responsável")
+
+        if agg.empty:
+            st.info("Sem pendências para exibir.")
+        else:
+            # gráfico Altair (mais profissional e consistente)
+            chart = (
+                alt.Chart(agg)
+                .mark_bar()
+                .encode(
+                    y=alt.Y("om:N", sort="-x", title="Responsável"),
+                    x=alt.X("Pendentes:Q", title="Qtd. pendente"),
+                    tooltip=[alt.Tooltip("om:N", title="Responsável"), alt.Tooltip("Pendentes:Q", title="Pendentes")],
+                )
+                .properties(height=min(520, max(180, 28 * len(agg))))
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+            st.markdown("##### Tabela")
             st.dataframe(agg, use_container_width=True, hide_index=True)
-        with c2:
-            # gráfico simples
-            if not agg.empty:
-                chart_df = agg.set_index("om")["Pendentes"]
-                st.bar_chart(chart_df)
 
-    st.divider()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # -------- Gerenciar responsáveis (master_oms) --------
-    st.subheader("Gerenciar responsáveis")
-    with st.expander("Adicionar / Remover", expanded=False):
-        add_c1, add_c2 = st.columns([1, 0.28], gap="small")
-        with add_c1:
-            novo = st.text_input("Nome do responsável", key="resp_new_name", placeholder="Ex.: 25 BI Pqdt")
-        with add_c2:
-            if st.button("Adicionar", type="primary", key="btn_add_resp", use_container_width=True):
-                ok, msg = add_master_om(novo)
-                if ok:
+    with tab2:
+        st.markdown("### Cadastro de responsáveis")
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+
+        cA, cB = st.columns([1.0, 1.0], gap="large")
+
+        with cA:
+            st.markdown("#### ➕ Adicionar")
+            with st.form("form_add_resp", clear_on_submit=True):
+                novo = st.text_input("Nome do responsável", placeholder="Ex.: 25º BI Pqdt")
+                ok = st.form_submit_button("Adicionar", type="primary")
+            if ok:
+                ok2, msg = add_master_om(novo)
+                if ok2:
                     st.toast("Adicionado ✅")
                     st.success(msg)
-                    st.session_state["resp_new_name"] = ""
                     st.rerun()
                 else:
                     st.error(msg)
 
-        st.markdown("---")
-        lista = get_master_oms()
-        rm = st.multiselect("Remover responsáveis", options=lista, key="resp_rm_list")
-        if st.button("Remover selecionados", key="btn_rm_resp", use_container_width=True):
-            ok, msg = delete_master_oms(rm)
-            if ok:
-                st.toast("Removido ✅")
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
-
-    st.divider()
-
-    # -------- Contatos por responsável --------
-    st.subheader("Contatos (nome + telefone) por responsável")
-
-    oms = get_master_oms()
-    cA, cB = st.columns([0.9, 1.1], gap="large")
-
-    with cA:
-        st.markdown("##### Cadastrar contato")
-        resp_sel = st.selectbox("Responsável", options=["(selecione)"] + oms, index=0, key="cont_resp_sel")
-        nome_cont = st.text_input("Nome do contato", key="cont_nome", placeholder="Ex.: Sgt Paulo")
-        tel_cont = st.text_input("Telefone", key="cont_tel", placeholder="Ex.: 21999998888")
-
-        if st.button("Salvar contato", type="primary", key="btn_save_contact", use_container_width=True):
-            if resp_sel == "(selecione)":
-                st.error("Selecione um responsável.")
-            elif not _normalize_name(nome_cont):
-                st.error("Informe o nome do contato.")
-            elif not _digits_only_phone(tel_cont):
-                st.error("Informe um telefone válido.")
-            else:
-                try:
-                    insert_contato_responsavel(resp_sel, nome_cont, tel_cont)
-                    st.toast("Contato salvo ✅")
-                    st.session_state["cont_nome"] = ""
-                    st.session_state["cont_tel"] = ""
+        with cB:
+            st.markdown("#### 🗑️ Remover")
+            lista = get_master_oms()
+            rm = st.multiselect("Selecione para remover", options=lista, key="resp_rm_list")
+            if st.button("Remover selecionados", use_container_width=True):
+                ok3, msg = delete_master_oms(rm)
+                if ok3:
+                    st.toast("Removido ✅")
+                    st.success(msg)
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar contato: {e}")
+                else:
+                    st.error(msg)
 
-    with cB:
-        st.markdown("##### Lista de contatos")
-        dfc = fetch_contatos_responsaveis()
-        if dfc.empty:
-            st.info("Sem contatos cadastrados.")
-        else:
-            # filtro opcional por responsável
-            f = st.selectbox("Filtrar", options=["Todos"] + sorted(dfc["responsavel"].dropna().astype(str).unique().tolist()), key="cont_filter")
-            dfv = dfc.copy()
-            if f != "Todos":
-                dfv = dfv[dfv["responsavel"].astype(str) == f]
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            # tabela visual
-            show = pd.DataFrame(
-                {
-                    "ID": dfv.get("id", "").astype(str),
-                    "Responsável": dfv.get("responsavel", "").astype(str),
-                    "Contato": dfv.get("contato_nome", "").astype(str),
-                    "Telefone": dfv.get("telefone", "").astype(str),
-                }
-            )
-            st.dataframe(show, use_container_width=True, hide_index=True)
+    with tab3:
+        st.markdown("### Contatos por responsável")
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-            # ações: abrir whatsapp + excluir (linha por linha)
-            st.markdown("##### Ações")
-            for _, r in dfv.iterrows():
-                rid = int(r.get("id"))
-                resp = str(r.get("responsavel") or "")
-                nome = str(r.get("contato_nome") or "")
-                tel = str(r.get("telefone") or "")
-                msg_padrao = f"Olá, {nome}! Tudo bem? Poderia me atualizar sobre as pendências do {resp}, por gentileza?"
-                url = whatsapp_web_url(tel, msg_padrao)
+        oms = get_master_oms()
+        left, right = st.columns([0.95, 1.05], gap="large")
 
-                row1, row2, row3 = st.columns([1.2, 0.55, 0.25], gap="small")
-                with row1:
-                    st.write(f"**{resp}** — {nome} ({tel})")
-                with row2:
-                    st.link_button("Abrir WhatsApp", url, use_container_width=True)
-                with row3:
-                    if st.button("🗑️", key=f"del_contact_{rid}", help="Excluir contato"):
-                        try:
-                            delete_contato_responsavel(rid)
-                            st.toast("Excluído ✅")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao excluir: {e}")
+        with left:
+            st.markdown("#### ➕ Cadastrar contato")
+            with st.form("form_add_contact", clear_on_submit=True):
+                resp_sel = st.selectbox("Responsável", options=["(selecione)"] + oms, index=0)
+                nome_cont = st.text_input("Nome do contato", placeholder="Ex.: Sgt Paulo")
+                tel_cont = st.text_input("Telefone", placeholder="Ex.: 21999998888")
+                okc = st.form_submit_button("Salvar contato", type="primary")
+            if okc:
+                if resp_sel == "(selecione)":
+                    st.error("Selecione um responsável.")
+                elif not _normalize_name(nome_cont):
+                    st.error("Informe o nome do contato.")
+                elif not _digits_only_phone(tel_cont):
+                    st.error("Informe um telefone válido.")
+                else:
+                    try:
+                        insert_contato_responsavel(resp_sel, nome_cont, tel_cont)
+                        st.toast("Contato salvo ✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar contato: {e}")
+
+            st.markdown("---")
+            st.markdown("#### 💬 Atalho WhatsApp")
+            st.caption("Dica: use o botão da lista ao lado para abrir direto com mensagem pronta.")
+
+        with right:
+            st.markdown("#### 📇 Lista de contatos")
+            dfc = fetch_contatos_responsaveis()
+
+            if dfc.empty:
+                st.info("Sem contatos cadastrados.")
+            else:
+                # filtro
+                responsaveis_unicos = sorted(dfc["responsavel"].dropna().astype(str).unique().tolist()) if "responsavel" in dfc.columns else []
+                f = st.selectbox("Filtrar por responsável", options=["Todos"] + responsaveis_unicos, key="cont_filter")
+                dfv = dfc.copy()
+                if f != "Todos" and "responsavel" in dfv.columns:
+                    dfv = dfv[dfv["responsavel"].astype(str) == f]
+
+                # tabela enxuta
+                show = pd.DataFrame(
+                    {
+                        "ID": dfv.get("id", "").astype(str),
+                        "Responsável": dfv.get("responsavel", "").astype(str),
+                        "Contato": dfv.get("contato_nome", "").astype(str),
+                        "Telefone": dfv.get("telefone", "").astype(str),
+                    }
+                )
+                st.dataframe(show, use_container_width=True, hide_index=True)
+
+                st.markdown("#### Ações")
+                for _, r in dfv.iterrows():
+                    rid = int(r.get("id"))
+                    resp = str(r.get("responsavel") or "")
+                    nome = str(r.get("contato_nome") or "")
+                    tel = str(r.get("telefone") or "")
+                    msg_padrao = f"Olá, {nome}! Tudo bem? Poderia me atualizar sobre as pendências do {resp}, por gentileza?"
+                    url = whatsapp_web_url(tel, msg_padrao)
+
+                    row1, row2, row3 = st.columns([1.25, 0.55, 0.20], gap="small")
+                    with row1:
+                        st.write(f"**{resp}** — {nome} ({tel})")
+                    with row2:
+                        st.link_button("Abrir WhatsApp", url, use_container_width=True)
+                    with row3:
+                        if st.button("🗑️", key=f"del_contact_{rid}", help="Excluir contato"):
+                            try:
+                                delete_contato_responsavel(rid)
+                                st.toast("Excluído ✅")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao excluir: {e}")
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================================================
