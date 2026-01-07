@@ -442,6 +442,8 @@ def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: st
     _sb_table("responsaveis_contatos").insert(payload).execute()
 
 
+
+
 def delete_contato_responsavel(contato_id: int):
     _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
 
