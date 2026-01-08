@@ -30,12 +30,23 @@ h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.15rem; }
 section[data-testid="stSidebar"] { border-right: 1px solid rgba(49,51,63,0.10); }
 section[data-testid="stSidebar"] .block-container { padding-top: 1.0rem; }
 
-/* ---------- Inputs ---------- */
+/* ---------- Metrics ---------- */
+div[data-testid="stMetric"]{
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 16px;
+  padding: 14px 14px;
+  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.05);
+}
+div[data-testid="stMetric"] label { opacity: 0.75; }
+div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; }
+
+/* ---------- Inputs / Buttons ---------- */
 .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
   border-radius: 14px !important;
 }
 
-/* ---------- Buttons (minimal + equal size) ---------- */
+/* Botões padronizados (mesmo tamanho) */
 .stButton>button{
   border-radius: 14px !important;
   height: 42px !important;
@@ -45,7 +56,6 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.0rem; }
 .stButton>button:hover{
   border: 1px solid rgba(49,51,63,0.22) !important;
 }
-.btnrow .stButton>button{ width: 100% !important; }
 
 /* ---------- Dataframes / Editors ---------- */
 div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
@@ -66,7 +76,7 @@ div[data-testid="stDataEditor"] table td {
 
 hr { border-color: rgba(49,51,63,0.10); }
 
-/* ---------- Badge ---------- */
+/* Badge (pendente/salvo) */
 .badge{
   display:inline-flex; align-items:center; gap:8px;
   padding: 6px 10px; border-radius: 999px;
@@ -150,7 +160,7 @@ def require_auth():
     if st.session_state["sb_session"] and st.session_state["sb_user"]:
         return
 
-    st.title("🔐 Login")
+    st.title("🔐 Controle de Documentos — Login")
     st.markdown('<div class="small-muted">Acesse com sua conta para ver apenas seus dados.</div>', unsafe_allow_html=True)
 
     tabs = st.tabs(["Entrar", "Criar conta"])
@@ -181,7 +191,7 @@ def require_auth():
                 sb.auth.sign_up({"email": email, "password": password})
                 st.success("Conta criada. Agora faça login na aba 'Entrar'.")
             except Exception:
-                st.error("Não foi possível criar a conta.")
+                st.error("Não foi possível criar a conta. Tente outro email ou uma senha mais forte.")
 
     st.stop()
 
@@ -194,13 +204,20 @@ def sidebar_layout() -> tuple[str, str]:
     st.session_state.setdefault("dash_name", load_dash_name_from_user())
 
     with st.sidebar:
-        st.markdown("## 📊 Controle")
+        st.markdown("## 📊 Controle de Documentos")
+        st.markdown('<div class="small-muted">Dashboard operacional</div>', unsafe_allow_html=True)
 
         user = st.session_state.get("sb_user")
         if user:
-            st.markdown(f"<div class='small-muted'>👤 {user.email}</div>", unsafe_allow_html=True)
+            st.markdown(f"**👤 {user.email}**")
 
-        st.text_input("Nome", key="dash_name", on_change=_on_change_dash_name)
+        st.markdown("---")
+        st.text_input(
+            "Nome",
+            key="dash_name",
+            help="Este nome aparecerá no menu e no título principal.",
+            on_change=_on_change_dash_name,
+        )
         dash_title = (st.session_state.get("dash_name") or "Dashboard").strip() or "Dashboard"
 
         st.markdown("---")
@@ -208,14 +225,11 @@ def sidebar_layout() -> tuple[str, str]:
         page = st.radio("Menu", menu_options, index=0)
 
         st.markdown("---")
-        c1, c2 = st.columns(2, gap="small")
+        c1, c2 = st.columns(2)
         with c1:
-            st.markdown("<div class='btnrow'>", unsafe_allow_html=True)
             if st.button("🔄", help="Atualizar", use_container_width=True):
                 st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
         with c2:
-            st.markdown("<div class='btnrow'>", unsafe_allow_html=True)
             if st.button("🚪", help="Sair", use_container_width=True):
                 try:
                     get_supabase().auth.sign_out()
@@ -224,7 +238,8 @@ def sidebar_layout() -> tuple[str, str]:
                 st.session_state["sb_session"] = None
                 st.session_state["sb_user"] = None
                 st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.caption("v1.0 • Streamlit + Supabase")
 
     return page, dash_title
 
@@ -300,7 +315,7 @@ def fetch_retornos(caso_id: int) -> pd.DataFrame:
 
 
 def fetch_pendencias() -> pd.DataFrame:
-    res = _sb_table("retornos_om").select("caso_id,status").execute()
+    res = _sb_table("retornos_om").select("caso_id,status,om").execute()
     data = res.data or []
     if not data:
         return pd.DataFrame(columns=["caso_id", "qtd"])
@@ -360,37 +375,64 @@ def fetch_arquivados_casos() -> pd.DataFrame:
     return df.sort_values("id", ascending=False)
 
 
-# master_oms
 def get_master_oms() -> list[str]:
     res = _sb_table("master_oms").select("nome").order("nome").execute()
     return [x["nome"] for x in (res.data or [])]
 
 
-def add_master_om(nome: str):
+def ensure_master_om(nome: str):
     nome = (nome or "").strip()
     if not nome:
-        return False, "Informe o nome do Responsável."
+        return
+    res = _sb_table("master_oms").select("nome").eq("nome", nome).limit(1).execute()
+    if res.data:
+        return
     user = st.session_state["sb_user"]
-    res = _sb_table("master_oms").select("nome").execute()
-    exists = any((x.get("nome") or "").strip().lower() == nome.lower() for x in (res.data or []))
-    if exists:
-        return False, "Esse Responsável já existe."
-    payload = {"owner_id": user.id, "nome": nome, "created_at": datetime.now().isoformat()}
-    _sb_table("master_oms").insert(payload).execute()
-    return True, f"Responsável adicionado: {nome}"
+    _sb_table("master_oms").insert({"owner_id": user.id, "nome": nome, "created_at": datetime.now().isoformat()}).execute()
 
 
-def delete_master_oms(nomes: list[str]):
-    nomes = [(n or "").strip() for n in (nomes or []) if (n or "").strip()]
-    if not nomes:
-        return True, "Nada para remover."
-    for n in nomes:
-        _sb_table("master_oms").delete().eq("nome", n).execute()
-        _sb_table("retornos_om").delete().eq("om", n).execute()
-    return True, "Responsáveis removidos ✅"
+def salvar_ou_atualizar_solicitacao(
+    caso_id: int,
+    assunto_solic: str | None,
+    prazo_om: date | None,
+    selecionadas: list[str],
+    nr_doc_solicitado: str | None,
+):
+    payload = {
+        "assunto_solic": (assunto_solic or "").strip() or None,
+        "prazo_om": prazo_om.isoformat() if prazo_om else None,
+        "status": "Distribuído",
+        "nr_doc_solicitado": (nr_doc_solicitado or "").strip() or None,
+    }
+    _sb_table("casos").update(payload).eq("id", int(caso_id)).execute()
+
+    ret = fetch_retornos(int(caso_id))
+    existentes = set(ret["om"].tolist()) if not ret.empty else set()
+    selecionadas_set = set(selecionadas)
+
+    for om in list(existentes - selecionadas_set):
+        _sb_table("retornos_om").delete().eq("caso_id", int(caso_id)).eq("om", om).execute()
+
+    user = st.session_state["sb_user"]
+
+    for om in list(existentes & selecionadas_set):
+        _sb_table("retornos_om").update({"prazo_om": prazo_om.isoformat() if prazo_om else None}).eq("caso_id", int(caso_id)).eq("om", om).execute()
+
+    for om in list(selecionadas_set - existentes):
+        _sb_table("retornos_om").insert(
+            {
+                "owner_id": user.id,
+                "caso_id": int(caso_id),
+                "om": om,
+                "status": "Pendente",
+                "prazo_om": prazo_om.isoformat() if prazo_om else None,
+                "dt_resposta": None,
+                "observacoes": None,
+            }
+        ).execute()
 
 
-# contatos (tabela responsaveis_contatos)
+# ======= contatos por responsável =======
 def fetch_contatos_responsaveis() -> pd.DataFrame:
     res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
     return pd.DataFrame(res.data or [])
@@ -417,7 +459,7 @@ def delete_contato_responsavel(contato_id: int):
 
 
 # =========================================================
-# UI helpers
+# Helpers UI
 # =========================================================
 def _only_digits_phone(s: str) -> str:
     return re.sub(r"[^0-9]", "", s or "")
@@ -427,30 +469,9 @@ def _wa_web_link(phone_digits: str, text: str = "") -> str:
     phone_digits = _only_digits_phone(phone_digits)
     if not phone_digits:
         return "https://web.whatsapp.com/"
-    if phone_digits.startswith("55"):
-        phone = phone_digits
-    else:
-        phone = "55" + phone_digits
+    phone = phone_digits if phone_digits.startswith("55") else "55" + phone_digits
     text_q = (text or "").replace(" ", "%20").replace("\n", "%0A")
     return f"https://web.whatsapp.com/send?phone={phone}&text={text_q}"
-
-
-def _fmt_date_iso_to_ddmmyyyy(v):
-    if not v:
-        return "-"
-    try:
-        return pd.to_datetime(v).strftime("%d/%m/%Y")
-    except Exception:
-        return "-"
-
-
-def _parse_ddmmyyyy_to_date(s: str):
-    if not s or str(s).strip() in ["-", "NaT", "None"]:
-        return None
-    try:
-        return datetime.strptime(str(s).strip(), "%d/%m/%Y").date()
-    except Exception:
-        return None
 
 
 def _row_style_acompanhamento(row):
@@ -566,7 +587,6 @@ page, dash_title = sidebar_layout()
 
 _apply_defaults_if_missing()
 
-# aplicar clear/load antes da UI
 if st.session_state.pop("__clear_doc_box__", False):
     _apply_clear_doc_box()
     st.session_state["current_selected_id"] = None
@@ -609,7 +629,6 @@ if page == f"📋 {dash_title}":
     k4.metric("Hoje", hoje.strftime("%d/%m/%Y"))
     st.divider()
 
-    # Documento (fechado)
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
 
@@ -644,7 +663,7 @@ if page == f"📋 {dash_title}":
 
             r1, r2 = st.columns(2, gap="small")
             with r1:
-                if st.button("💾", help="Salvar", use_container_width=True):
+                if st.button("💾", help="Salvar", type="primary", use_container_width=True):
                     sel_id = st.session_state.get("current_selected_id")
 
                     nr_doc = (st.session_state.get("doc_nr") or "").strip()
@@ -674,7 +693,6 @@ if page == f"📋 {dash_title}":
                             }
                             update_caso_by_id_safe(int(sel_id), update_payload)
                             if assunto_solic or nr_solic or prazo_om or responsaveis:
-                                # mantém master_oms (opcional) e salva retornos
                                 salvar_ou_atualizar_solicitacao(
                                     caso_id=int(sel_id),
                                     assunto_solic=assunto_solic or None,
@@ -728,6 +746,7 @@ if page == f"📋 {dash_title}":
                                 st.error("Preencha algo para salvar.")
                     except Exception as e:
                         st.error(f"Erro: {e}")
+
             with r2:
                 if st.button("🧹", help="Limpar", use_container_width=True):
                     _request_clear_doc_box()
@@ -858,7 +877,7 @@ if page == f"📋 {dash_title}":
                             st.session_state[f"confirm_save_ret_{selected_id}"] = True
 
                     if st.session_state.get(f"confirm_save_ret_{selected_id}"):
-                        st.warning("Confirma salvar?")
+                        st.warning("Salvar?")
                         c1, c2 = st.columns([0.16, 0.16], gap="small")
                         with c1:
                             if st.button("✅", help="Confirmar", use_container_width=True, key=f"btn_confirm_save_ret_{selected_id}"):
@@ -900,7 +919,7 @@ elif page == "👥 Responsável":
 
     st.markdown("---")
 
-    # Gráfico com eixo inteiro (passo 1)
+    # ✅ Gráfico: eixo inteiro (passo 1)
     st.subheader("📊")
     if pend_by_resp.empty:
         st.info("Sem pendências registradas.")
@@ -922,7 +941,7 @@ elif page == "👥 Responsável":
 
     st.markdown("---")
 
-    # Contatos WhatsApp
+    # Contatos
     cL, cR = st.columns([1, 1.2], gap="large")
 
     with cL:
@@ -938,6 +957,7 @@ elif page == "👥 Responsável":
                     if not responsavel.strip() or not contato_nome.strip() or not telefone.strip():
                         st.error("Preencha Responsável, Nome e Telefone.")
                     else:
+                        ensure_master_om(responsavel.strip())
                         insert_contato_responsavel(responsavel.strip(), contato_nome.strip(), telefone.strip())
                         st.toast("✅")
                         st.session_state["rc_resp"] = ""
