@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import streamlit as st
 
 st.set_page_config(
@@ -6,7 +8,6 @@ st.set_page_config(
     layout="wide"
 )
 
-from __future__ import annotations
 
 from datetime import date, datetime
 import re
