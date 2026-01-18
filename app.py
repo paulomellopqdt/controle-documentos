@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
@@ -254,11 +255,6 @@ def fetch_caso(caso_id: int) -> dict | None:
 
 
 def update_caso_by_id_safe(caso_id: int, payload: dict):
-    """
-    Corrige o erro do NOT NULL no Supabase:
-    - nunca envia nr_doc_recebido / assunto_doc como None/vazio
-    - se tentar salvar vazio, grava '-' (padrão do seu banco)
-    """
     if "nr_doc_recebido" in payload and (payload["nr_doc_recebido"] is None or str(payload["nr_doc_recebido"]).strip() == ""):
         payload["nr_doc_recebido"] = "-"
     if "assunto_doc" in payload and (payload["assunto_doc"] is None or str(payload["assunto_doc"]).strip() == ""):
@@ -267,22 +263,15 @@ def update_caso_by_id_safe(caso_id: int, payload: dict):
         payload["origem"] = "-"
     if "observacoes" in payload and (payload["observacoes"] is None or str(payload["observacoes"]).strip() == ""):
         payload["observacoes"] = "-"
-
     _sb_table("casos").update(payload).eq("id", int(caso_id)).execute()
 
 
 def insert_documento_safe(nr_doc: str, assunto_doc: str, origem: str | None, prazo_final: date | None, obs: str | None) -> int:
-    """
-    Corrige o erro do NOT NULL no insert:
-    - se vier vazio, grava '-' (padrão do seu banco)
-    """
     user = st.session_state["sb_user"]
-
     nr_doc = (nr_doc or "").strip() or "-"
     assunto_doc = (assunto_doc or "").strip() or "-"
     origem = (origem or "").strip() if origem and origem.strip() else "-"
     obs = (obs or "").strip() if obs and obs.strip() else "-"
-
     payload = {
         "owner_id": user.id,
         "nr_doc_recebido": nr_doc,
@@ -374,13 +363,11 @@ def add_master_om(nome: str):
     nome = (nome or "").strip()
     if not nome:
         return False, "Informe o nome do Responsável."
-
     user = st.session_state["sb_user"]
     res = _sb_table("master_oms").select("nome").execute()
     exists = any((x.get("nome") or "").strip().lower() == nome.lower() for x in (res.data or []))
     if exists:
         return False, "Esse Responsável já existe."
-
     payload = {"owner_id": user.id, "nome": nome, "created_at": datetime.now().isoformat()}
     _sb_table("master_oms").insert(payload).execute()
     return True, f"Responsável adicionado: {nome}"
@@ -438,7 +425,49 @@ def salvar_ou_atualizar_solicitacao(
 
 
 # =========================================================
-# Helpers
+# Contatos por responsável (usa tabela: responsaveis_contatos)
+# =========================================================
+def _only_digits_phone(s: str) -> str:
+    return re.sub(r"[^0-9]", "", s or "")
+
+
+def _wa_web_link(phone_digits: str, text: str = "") -> str:
+    phone_digits = _only_digits_phone(phone_digits)
+    if not phone_digits:
+        return "https://web.whatsapp.com/"
+    phone = phone_digits if phone_digits.startswith("55") else "55" + phone_digits
+    text_q = (text or "").replace(" ", "%20").replace("\n", "%0A")
+    return f"https://web.whatsapp.com/send?phone={phone}&text={text_q}"
+
+
+def fetch_contatos_responsaveis() -> pd.DataFrame:
+    # se a tabela não existir ainda, a UI abaixo vai avisar
+    res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
+    return pd.DataFrame(res.data or [])
+
+
+def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: str):
+    user = st.session_state["sb_user"]
+    payload = {
+        "owner_id": user.id,
+        "responsavel": (responsavel or "").strip(),
+        "contato_nome": (contato_nome or "").strip(),
+        "telefone": (telefone or "").strip(),
+        "created_at": datetime.now().isoformat(),
+    }
+    _sb_table("responsaveis_contatos").insert(payload).execute()
+
+
+def update_contato_responsavel(contato_id: int, payload: dict):
+    _sb_table("responsaveis_contatos").update(payload).eq("id", int(contato_id)).execute()
+
+
+def delete_contato_responsavel(contato_id: int):
+    _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
+
+
+# =========================================================
+# Helpers (Dashboard)
 # =========================================================
 def _fmt_date_iso_to_ddmmyyyy(v):
     if not v:
@@ -491,7 +520,6 @@ DOC_KEYS = [
 
 
 def _apply_defaults_if_missing():
-    # IMPORTANT: só setdefault (não dá erro de widget)
     st.session_state.setdefault("current_selected_id", None)
     st.session_state.setdefault("pending_select_id", None)
     st.session_state.setdefault("__clear_doc_box__", False)
@@ -515,7 +543,6 @@ def _request_clear_doc_box():
 
 
 def _apply_clear_doc_box():
-    # antes dos widgets existirem
     for k in DOC_KEYS:
         if k in st.session_state:
             st.session_state.pop(k, None)
@@ -582,7 +609,6 @@ page, dash_title = sidebar_layout()
 
 _apply_defaults_if_missing()
 
-# ✅ aplicar clear/load ANTES de qualquer widget da tela
 if st.session_state.pop("__clear_doc_box__", False):
     _apply_clear_doc_box()
     st.session_state["current_selected_id"] = None
@@ -625,9 +651,6 @@ if page == f"📋 {dash_title}":
     k4.metric("Hoje", hoje.strftime("%d/%m/%Y"))
     st.divider()
 
-    # =========================
-    # Documento (sempre FECHADO)
-    # =========================
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
 
@@ -659,7 +682,6 @@ if page == f"📋 {dash_title}":
                 options=oms,
                 key="sol_responsaveis",
                 label_visibility="collapsed",
-                help="Selecione os responsáveis desta solicitação.",
             )
 
         with colC:
@@ -683,7 +705,6 @@ if page == f"📋 {dash_title}":
                 nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
 
                 try:
-                    # 1) se tem linha selecionada -> UPDATE
                     if sel_id:
                         update_payload = {
                             "nr_doc_recebido": nr_doc,
@@ -710,10 +731,7 @@ if page == f"📋 {dash_title}":
 
                         st.toast("Atualizado ✅")
                         st.rerun()
-
-                    # 2) sem linha selecionada -> INSERT novo e aparece na tabela
                     else:
-                        # se tiver documento, cria documento
                         if nr_doc or assunto_doc or origem or prazo_final or obs_doc:
                             new_id = insert_documento_safe(
                                 nr_doc=nr_doc,
@@ -736,8 +754,6 @@ if page == f"📋 {dash_title}":
                             st.session_state["pending_select_id"] = int(new_id)
                             st.toast("Salvo ✅")
                             st.rerun()
-
-                        # se não tiver documento mas tiver solicitação
                         elif assunto_solic:
                             new_id = insert_solicitacao_sem_documento(
                                 assunto_solic=assunto_solic,
@@ -759,7 +775,6 @@ if page == f"📋 {dash_title}":
                             st.rerun()
                         else:
                             st.error("Preencha algum campo do Documento ou o Assunto da Solicitação para salvar um novo item.")
-
                 except Exception as e:
                     st.error(f"Erro ao salvar: {e}")
 
@@ -767,9 +782,6 @@ if page == f"📋 {dash_title}":
                 _request_clear_doc_box()
                 st.rerun()
 
-    # =========================
-    # Acompanhamento
-    # =========================
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
@@ -800,7 +812,6 @@ if page == f"📋 {dash_title}":
             btn_arquivar = st.button("🗄️ Arquivar", type="primary", key="dash_btn_arquivar")
 
         df_styled = df_show.style.apply(_row_style_acompanhamento, axis=1)
-
         sel = st.dataframe(
             df_styled,
             use_container_width=True,
@@ -830,7 +841,6 @@ if page == f"📋 {dash_title}":
         elif btn_arquivar and not selected_id:
             st.warning("Selecione uma linha na tabela.")
 
-        # ✅ Só mostra Mensagem e Responsável se houver linha selecionada
         if selected_id:
             caso = fetch_caso(int(selected_id)) or {}
             ret = fetch_retornos(int(selected_id))
@@ -917,14 +927,13 @@ if page == f"📋 {dash_title}":
 
 
 # =========================================================
-# PAGE: RESPONSÁVEL
+# PAGE: RESPONSÁVEL  (ATUALIZAÇÃO SOLICITADA)
 # =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
-    st.markdown('<div class="small-muted">Cadastro e gestão de responsáveis (master_oms)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-muted">Cadastre contatos (nome + telefone) por responsável e abra no WhatsApp Web.</div>', unsafe_allow_html=True)
     st.divider()
 
-    # mini-dashboard
     oms = get_master_oms()
     c1, c2 = st.columns(2)
     c1.metric("Total de Responsáveis", len(oms))
@@ -932,11 +941,144 @@ elif page == "👥 Responsável":
 
     st.markdown("---")
 
-    left, right = st.columns([1, 1], gap="large")
-    with left:
+    if not oms:
+        st.info("Cadastre ao menos 1 responsável para vincular contatos.")
+    else:
+        # selecionar responsável e cadastrar contatos (pode ter vários)
+        left, right = st.columns([1, 1.4], gap="large")
+
+        with left:
+            st.subheader("Cadastrar contato")
+            resp_sel = st.selectbox("Responsável", options=oms, key="resp_sel")
+            contato_nome = st.text_input("Nome", placeholder="Ex: Sgt João", key="cont_nome")
+            telefone = st.text_input("Telefone (DDD)", placeholder="Ex: 21999999999", key="cont_tel")
+
+            # botões compactos mantendo padrão
+            b1, b2 = st.columns(2, gap="small")
+            with b1:
+                if st.button("➕", type="primary", help="Salvar contato", use_container_width=True):
+                    try:
+                        if not contato_nome.strip() or not telefone.strip():
+                            st.error("Preencha Nome e Telefone.")
+                        else:
+                            insert_contato_responsavel(resp_sel, contato_nome.strip(), telefone.strip())
+                            st.toast("Contato salvo ✅")
+                            st.session_state["cont_nome"] = ""
+                            st.session_state["cont_tel"] = ""
+                            st.rerun()
+                    except Exception as e:
+                        st.error(
+                            "Não consegui acessar a tabela de contatos. "
+                            "Certifique-se de ter criado a tabela `responsaveis_contatos` no Supabase."
+                        )
+                        st.error(str(e))
+            with b2:
+                if st.button("🧹", help="Limpar", use_container_width=True):
+                    st.session_state["cont_nome"] = ""
+                    st.session_state["cont_tel"] = ""
+                    st.rerun()
+
+        with right:
+            st.subheader("Contatos")
+            try:
+                dfc = fetch_contatos_responsaveis()
+            except Exception as e:
+                st.error(
+                    "A tabela `responsaveis_contatos` não foi encontrada ou não está acessível. "
+                    "Crie a tabela no Supabase e habilite as permissões."
+                )
+                st.code(
+                    """-- SQL (Supabase) sugerido:
+create table if not exists public.responsaveis_contatos (
+  id bigserial primary key,
+  owner_id uuid not null,
+  responsavel text not null,
+  contato_nome text not null,
+  telefone text not null,
+  created_at timestamptz not null default now()
+);
+""",
+                    language="sql",
+                )
+                st.stop()
+
+            dfc = dfc[dfc["responsavel"] == resp_sel] if not dfc.empty else dfc
+
+            if dfc.empty:
+                st.info("Nenhum contato para este responsável.")
+            else:
+                df_view = dfc[["id", "responsavel", "contato_nome", "telefone"]].copy()
+                df_view = df_view.rename(columns={"id": "ID", "responsavel": "Responsável", "contato_nome": "Nome", "telefone": "Telefone"})
+
+                edited = st.data_editor(
+                    df_view,
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"tbl_contatos_{resp_sel}",
+                    column_config={
+                        "ID": st.column_config.NumberColumn("ID", disabled=True),
+                        "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
+                        "Nome": st.column_config.TextColumn("Nome"),
+                        "Telefone": st.column_config.TextColumn("Telefone"),
+                    },
+                    disabled=["ID", "Responsável"],
+                )
+
+                ids = edited["ID"].astype(int).tolist()
+
+                a1, a2, a3, a4 = st.columns([0.25, 0.25, 0.25, 0.25], gap="small")
+
+                with a1:
+                    if st.button("💾", type="primary", help="Salvar edições", use_container_width=True):
+                        try:
+                            orig = df_view.set_index("ID")
+                            now = edited.set_index("ID")
+                            for cid in now.index:
+                                o = orig.loc[cid]
+                                n = now.loc[cid]
+                                payload = {}
+                                if str(o["Nome"]) != str(n["Nome"]):
+                                    payload["contato_nome"] = str(n["Nome"]).strip()
+                                if str(o["Telefone"]) != str(n["Telefone"]):
+                                    payload["telefone"] = str(n["Telefone"]).strip()
+                                if payload:
+                                    update_contato_responsavel(int(cid), payload)
+                            st.toast("Edições salvas ✅")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar edições: {e}")
+
+                with a2:
+                    pick = st.selectbox("Contato", ids, format_func=lambda x: f"ID {x}", key=f"wa_pick_{resp_sel}")
+
+                with a3:
+                    row = edited[edited["ID"] == pick].iloc[0]
+                    tel = str(row["Telefone"])
+                    nome = str(row["Nome"])
+                    link = _wa_web_link(tel, text=f"Olá {nome}!")
+                    try:
+                        st.link_button("🟢", link, use_container_width=True)
+                    except Exception:
+                        st.markdown(f"<a href='{link}' target='_blank'>🟢</a>", unsafe_allow_html=True)
+
+                with a4:
+                    del_id = st.selectbox("Remover", ids, key=f"del_pick_{resp_sel}")
+                    if st.button("🗑️", help="Remover contato", use_container_width=True):
+                        try:
+                            delete_contato_responsavel(int(del_id))
+                            st.toast("Removido ✅")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao remover: {e}")
+
+    st.markdown("---")
+    st.subheader("Gerenciar responsáveis")
+    left2, right2 = st.columns([1, 1], gap="large")
+
+    with left2:
         st.subheader("Cadastrar")
-        novo = st.text_input("Nome do responsável", placeholder="Ex: 25º BI Pqdt")
-        if st.button("➕ Adicionar", type="primary", use_container_width=True):
+        novo = st.text_input("Nome do responsável", placeholder="Ex: 25º BI Pqdt", key="novo_resp_nome")
+        if st.button("➕ Adicionar", type="primary", use_container_width=True, key="btn_add_master"):
             ok, msg = add_master_om(novo)
             if ok:
                 st.toast("Adicionado ✅")
@@ -945,10 +1087,10 @@ elif page == "👥 Responsável":
             else:
                 st.error(msg)
 
-    with right:
+    with right2:
         st.subheader("Remover")
-        remover = st.multiselect("Selecione para remover", options=oms)
-        if st.button("🗑️ Remover selecionados", use_container_width=True):
+        remover = st.multiselect("Selecione para remover", options=oms, key="rm_master_ms")
+        if st.button("🗑️ Remover", use_container_width=True, key="btn_rm_master"):
             ok, msg = delete_master_oms(remover)
             if ok:
                 st.toast("Removidos ✅")
@@ -956,13 +1098,6 @@ elif page == "👥 Responsável":
                 st.rerun()
             else:
                 st.error(msg)
-
-    st.markdown("---")
-    st.subheader("Lista")
-    if not oms:
-        st.info("Nenhum responsável cadastrado.")
-    else:
-        st.dataframe(pd.DataFrame({"Responsável": oms}), use_container_width=True, hide_index=True)
 
 
 # =========================================================
