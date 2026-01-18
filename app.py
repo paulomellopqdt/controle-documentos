@@ -931,173 +931,99 @@ if page == f"📋 {dash_title}":
 # =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
-    st.markdown('<div class="small-muted">Cadastre contatos (nome + telefone) por responsável e abra no WhatsApp Web.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-muted">Gestão de responsáveis e contatos</div>', unsafe_allow_html=True)
     st.divider()
+
+    # ===============================
+    # GERENCIAR RESPONSÁVEL (MASTER)
+    # ===============================
+    st.subheader("Gerenciar Responsável")
 
     oms = get_master_oms()
     c1, c2 = st.columns(2)
-    c1.metric("Total de Responsáveis", len(oms))
-    c2.metric("Hoje", date.today().strftime("%d/%m/%Y"))
 
-    st.markdown("---")
-
-    if not oms:
-        st.info("Cadastre ao menos 1 responsável para vincular contatos.")
-    else:
-        # selecionar responsável e cadastrar contatos (pode ter vários)
-        left, right = st.columns([1, 1.4], gap="large")
-
-        with left:
-            st.subheader("Cadastrar contato")
-            resp_sel = st.selectbox("Responsável", options=oms, key="resp_sel")
-            contato_nome = st.text_input("Nome", placeholder="Ex: Sgt João", key="cont_nome")
-            telefone = st.text_input("Telefone (DDD)", placeholder="Ex: 21999999999", key="cont_tel")
-
-            # botões compactos mantendo padrão
-            b1, b2 = st.columns(2, gap="small")
-            with b1:
-                if st.button("➕", type="primary", help="Salvar contato", use_container_width=True):
-                    try:
-                        if not contato_nome.strip() or not telefone.strip():
-                            st.error("Preencha Nome e Telefone.")
-                        else:
-                            insert_contato_responsavel(resp_sel, contato_nome.strip(), telefone.strip())
-                            st.toast("Contato salvo ✅")
-                            st.session_state["cont_nome"] = ""
-                            st.session_state["cont_tel"] = ""
-                            st.rerun()
-                    except Exception as e:
-                        st.error(
-                            "Não consegui acessar a tabela de contatos. "
-                            "Certifique-se de ter criado a tabela `responsaveis_contatos` no Supabase."
-                        )
-                        st.error(str(e))
-            with b2:
-                if st.button("🧹", help="Limpar", use_container_width=True):
-                    st.session_state["cont_nome"] = ""
-                    st.session_state["cont_tel"] = ""
-                    st.rerun()
-
-        with right:
-            st.subheader("Contatos")
-            try:
-                dfc = fetch_contatos_responsaveis()
-            except Exception as e:
-                st.error(
-                    "A tabela `responsaveis_contatos` não foi encontrada ou não está acessível. "
-                    "Crie a tabela no Supabase e habilite as permissões."
-                )
-                st.code(
-                    """-- SQL (Supabase) sugerido:
-create table if not exists public.responsaveis_contatos (
-  id bigserial primary key,
-  owner_id uuid not null,
-  responsavel text not null,
-  contato_nome text not null,
-  telefone text not null,
-  created_at timestamptz not null default now()
-);
-""",
-                    language="sql",
-                )
-                st.stop()
-
-            dfc = dfc[dfc["responsavel"] == resp_sel] if not dfc.empty else dfc
-
-            if dfc.empty:
-                st.info("Nenhum contato para este responsável.")
-            else:
-                df_view = dfc[["id", "responsavel", "contato_nome", "telefone"]].copy()
-                df_view = df_view.rename(columns={"id": "ID", "responsavel": "Responsável", "contato_nome": "Nome", "telefone": "Telefone"})
-
-                edited = st.data_editor(
-                    df_view,
-                    hide_index=True,
-                    use_container_width=True,
-                    key=f"tbl_contatos_{resp_sel}",
-                    column_config={
-                        "ID": st.column_config.NumberColumn("ID", disabled=True),
-                        "Responsável": st.column_config.TextColumn("Responsável", disabled=True),
-                        "Nome": st.column_config.TextColumn("Nome"),
-                        "Telefone": st.column_config.TextColumn("Telefone"),
-                    },
-                    disabled=["ID", "Responsável"],
-                )
-
-                ids = edited["ID"].astype(int).tolist()
-
-                a1, a2, a3, a4 = st.columns([0.25, 0.25, 0.25, 0.25], gap="small")
-
-                with a1:
-                    if st.button("💾", type="primary", help="Salvar edições", use_container_width=True):
-                        try:
-                            orig = df_view.set_index("ID")
-                            now = edited.set_index("ID")
-                            for cid in now.index:
-                                o = orig.loc[cid]
-                                n = now.loc[cid]
-                                payload = {}
-                                if str(o["Nome"]) != str(n["Nome"]):
-                                    payload["contato_nome"] = str(n["Nome"]).strip()
-                                if str(o["Telefone"]) != str(n["Telefone"]):
-                                    payload["telefone"] = str(n["Telefone"]).strip()
-                                if payload:
-                                    update_contato_responsavel(int(cid), payload)
-                            st.toast("Edições salvas ✅")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao salvar edições: {e}")
-
-                with a2:
-                    pick = st.selectbox("Contato", ids, format_func=lambda x: f"ID {x}", key=f"wa_pick_{resp_sel}")
-
-                with a3:
-                    row = edited[edited["ID"] == pick].iloc[0]
-                    tel = str(row["Telefone"])
-                    nome = str(row["Nome"])
-                    link = _wa_web_link(tel, text=f"Olá {nome}!")
-                    try:
-                        st.link_button("🟢", link, use_container_width=True)
-                    except Exception:
-                        st.markdown(f"<a href='{link}' target='_blank'>🟢</a>", unsafe_allow_html=True)
-
-                with a4:
-                    del_id = st.selectbox("Remover", ids, key=f"del_pick_{resp_sel}")
-                    if st.button("🗑️", help="Remover contato", use_container_width=True):
-                        try:
-                            delete_contato_responsavel(int(del_id))
-                            st.toast("Removido ✅")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao remover: {e}")
-
-    st.markdown("---")
-    st.subheader("Gerenciar responsáveis")
-    left2, right2 = st.columns([1, 1], gap="large")
-
-    with left2:
-        st.subheader("Cadastrar")
-        novo = st.text_input("Nome do responsável", placeholder="Ex: 25º BI Pqdt", key="novo_resp_nome")
-        if st.button("➕ Adicionar", type="primary", use_container_width=True, key="btn_add_master"):
+    with c1:
+        novo = st.text_input("Novo responsável", placeholder="Ex: 25º BI Pqdt")
+        if st.button("➕", use_container_width=True):
             ok, msg = add_master_om(novo)
             if ok:
-                st.toast("Adicionado ✅")
-                st.success(msg)
+                st.toast("Responsável adicionado ✅")
                 st.rerun()
             else:
                 st.error(msg)
 
-    with right2:
-        st.subheader("Remover")
-        remover = st.multiselect("Selecione para remover", options=oms, key="rm_master_ms")
-        if st.button("🗑️ Remover", use_container_width=True, key="btn_rm_master"):
+    with c2:
+        remover = st.multiselect("Remover responsável", options=oms)
+        if st.button("🗑️", use_container_width=True):
             ok, msg = delete_master_oms(remover)
             if ok:
-                st.toast("Removidos ✅")
-                st.success(msg)
+                st.toast("Responsável removido ✅")
                 st.rerun()
             else:
                 st.error(msg)
+
+    st.divider()
+
+    # ===============================
+    # CONTATOS
+    # ===============================
+    st.subheader("Contatos")
+
+    # cadastro
+    with st.expander("➕ Novo contato", expanded=False):
+        r1, r2 = st.columns(2)
+        with r1:
+            resp = st.selectbox("Responsável", options=oms)
+            nome = st.text_input("Nome do contato")
+        with r2:
+            tel = st.text_input("Telefone (DDD + número)")
+
+        if st.button("💾 Salvar contato", use_container_width=True):
+            if not resp or not nome or not tel:
+                st.error("Preencha todos os campos.")
+            else:
+                insert_contato_responsavel(resp, nome, tel)
+                st.toast("Contato salvo ✅")
+                st.rerun()
+
+    # lista
+    dfc = fetch_contatos_responsaveis()
+    if dfc.empty:
+        st.info("Nenhum contato cadastrado.")
+    else:
+        df_view = dfc[["responsavel", "contato_nome", "telefone"]].copy()
+        df_view.columns = ["Responsável", "Nome", "Telefone"]
+
+        st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+        st.markdown("### Ações")
+
+        a1, a2, a3 = st.columns([1, 1, 0.6])
+
+        with a1:
+            resp_sel = st.selectbox("Responsável", options=sorted(df_view["Responsável"].unique()))
+
+        with a2:
+            nomes = df_view[df_view["Responsável"] == resp_sel]["Nome"].tolist()
+            nome_sel = st.selectbox("Contato", options=nomes)
+
+        with a3:
+            row = df_view[(df_view["Responsável"] == resp_sel) & (df_view["Nome"] == nome_sel)].iloc[0]
+            telefone = row["Telefone"]
+            link = f"https://web.whatsapp.com/send?phone=55{''.join(filter(str.isdigit, telefone))}"
+
+            st.link_button("🟢", link, use_container_width=True)
+
+        if st.button("🗑️ Remover contato", use_container_width=True):
+            cid = dfc[
+                (dfc["responsavel"] == resp_sel) &
+                (dfc["contato_nome"] == nome_sel)
+            ]["id"].iloc[0]
+
+            delete_contato_responsavel(int(cid))
+            st.toast("Contato removido ✅")
+            st.rerun()
+
 
 
 # =========================================================
