@@ -1,7 +1,7 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="Controle de Documentos",
+    page_title="Controle de Docs",
     page_icon="icon.png",
     layout="wide"
 )
