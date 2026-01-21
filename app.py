@@ -439,6 +439,48 @@ def salvar_ou_atualizar_solicitacao(
             }
         ).execute()
 
+# =========================================================
+# Contatos por responsável (tabela: responsaveis_contatos)
+# =========================================================
+def _only_digits_phone(s: str) -> str:
+    return re.sub(r"[^0-9]", "", s or "")
+
+
+def _wa_web_link(phone_digits: str, text: str = "") -> str:
+    phone_digits = _only_digits_phone(phone_digits)
+    if not phone_digits:
+        return "https://web.whatsapp.com/"
+    phone = phone_digits if phone_digits.startswith("55") else "55" + phone_digits
+    text_q = (text or "").replace(" ", "%20").replace("\n", "%0A")
+    return f"https://web.whatsapp.com/send?phone={phone}&text={text_q}"
+
+
+def fetch_contatos_responsaveis() -> pd.DataFrame:
+    # exige tabela `responsaveis_contatos` no Supabase
+    res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
+    return pd.DataFrame(res.data or [])
+
+
+def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: str):
+    user = st.session_state["sb_user"]
+    payload = {
+        "owner_id": user.id,
+        "responsavel": (responsavel or "").strip(),
+        "contato_nome": (contato_nome or "").strip(),
+        "telefone": (telefone or "").strip(),
+        "created_at": datetime.now().isoformat(),
+    }
+    _sb_table("responsaveis_contatos").insert(payload).execute()
+
+
+def update_contato_responsavel(contato_id: int, payload: dict):
+    _sb_table("responsaveis_contatos").update(payload).eq("id", int(contato_id)).execute()
+
+
+def delete_contato_responsavel(contato_id: int):
+    _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
+
+
 
 # =========================================================
 # Helpers UI
