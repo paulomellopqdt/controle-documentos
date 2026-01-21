@@ -359,7 +359,6 @@ def fetch_arquivados_casos() -> pd.DataFrame:
     return df.sort_values("id", ascending=False)
 
 
-# ✅ Restaurar / Excluir
 def unarchive_caso(caso_id: int):
     _sb_table("arquivados").delete().eq("caso_id", int(caso_id)).execute()
 
@@ -439,6 +438,7 @@ def salvar_ou_atualizar_solicitacao(
             }
         ).execute()
 
+
 # =========================================================
 # Contatos por responsável (tabela: responsaveis_contatos)
 # =========================================================
@@ -456,7 +456,6 @@ def _wa_web_link(phone_digits: str, text: str = "") -> str:
 
 
 def fetch_contatos_responsaveis() -> pd.DataFrame:
-    # exige tabela `responsaveis_contatos` no Supabase
     res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
     return pd.DataFrame(res.data or [])
 
@@ -473,13 +472,8 @@ def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: st
     _sb_table("responsaveis_contatos").insert(payload).execute()
 
 
-def update_contato_responsavel(contato_id: int, payload: dict):
-    _sb_table("responsaveis_contatos").update(payload).eq("id", int(contato_id)).execute()
-
-
 def delete_contato_responsavel(contato_id: int):
     _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
-
 
 
 # =========================================================
@@ -628,7 +622,7 @@ if pending is not None:
 
 
 # =========================================================
-# PAGE: DASHBOARD (tabela de acompanhamento NÃO mexida)
+# PAGE: DASHBOARD (Acompanhamento sem alteração)
 # =========================================================
 if page == f"📋 {dash_title}":
     hoje = date.today()
@@ -715,6 +709,7 @@ if page == f"📋 {dash_title}":
                             "nr_doc_solicitado": nr_solic or None,
                         }
                         update_caso_by_id_safe(int(sel_id), update_payload)
+
                         if assunto_solic or nr_solic or prazo_om or responsaveis:
                             salvar_ou_atualizar_solicitacao(
                                 caso_id=int(sel_id),
@@ -723,6 +718,7 @@ if page == f"📋 {dash_title}":
                                 selecionadas=responsaveis,
                                 nr_doc_solicitado=nr_solic or "00",
                             )
+
                         set_resposta_e_status(int(sel_id), nr_resp)
                         st.toast("Atualizado ✅")
                         st.rerun()
@@ -755,10 +751,14 @@ if page == f"📋 {dash_title}":
                     st.error(f"Erro ao salvar: {e}")
 
             if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
+                # ✅ também deseleciona a linha no Acompanhamento
+                st.session_state.pop("tbl_dash", None)
+                st.session_state["current_selected_id"] = None
+                st.session_state["pending_select_id"] = None
                 _request_clear_doc_box()
                 st.rerun()
 
-    # --------- ACOMPANHAMENTO (SEM ALTERAÇÃO DE TABELA) ----------
+    # --------- ACOMPANHAMENTO (SEM ALTERAÇÃO) ----------
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
@@ -789,7 +789,6 @@ if page == f"📋 {dash_title}":
             btn_arquivar = st.button("🗄️ Arquivar", type="primary", key="dash_btn_arquivar")
 
         df_styled = df_show.style.apply(_row_style_acompanhamento, axis=1)
-
         sel = st.dataframe(
             df_styled,
             use_container_width=True,
@@ -799,7 +798,6 @@ if page == f"📋 {dash_title}":
             key="tbl_dash",
         )
 
-        # ✅ SELEÇÃO / LIMPEZA QUANDO DESMARCA
         clicked_id = None
         if sel and sel.get("selection", {}).get("rows"):
             idx = sel["selection"]["rows"][0]
@@ -807,8 +805,8 @@ if page == f"📋 {dash_title}":
 
         prev_id = st.session_state.get("current_selected_id")
 
+        # ✅ quando "desmarca" (volta sem seleção), limpa campos
         if clicked_id is None:
-            # não há seleção -> se tinha seleção antes, limpar campos
             if prev_id is not None:
                 st.session_state["current_selected_id"] = None
                 _request_clear_doc_box()
@@ -914,7 +912,7 @@ if page == f"📋 {dash_title}":
 
 
 # =========================================================
-# PAGE: RESPONSÁVEL (como você estava usando)
+# PAGE: RESPONSÁVEL
 # =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
@@ -990,39 +988,41 @@ elif page == "👥 Responsável":
         with a2:
             nomes = df_view[df_view["Responsável"] == resp_sel]["Nome"].tolist()
             nome_sel = st.selectbox("Contato", options=nomes, key="act_nome")
-        with a3:
-            row = df_view[(df_view["Responsável"] == resp_sel) & (df_view["Nome"] == nome_sel)].iloc[0]
-            telefone = row["Telefone"]
-            link = f"https://web.whatsapp.com/send?phone=55{''.join(filter(str.isdigit, str(telefone)))}"
-            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            st.link_button("🟢", link, use_container_width=True)
 
-        rm1, rm2 = st.columns([0.25, 0.75], gap="small")
-        with rm1:
-            if st.button("🗑️", help="Remover contato selecionado", use_container_width=True, key="btn_ct_rm"):
-                st.session_state["confirm_rm_contact"] = True
-        with rm2:
-            if st.session_state.get("confirm_rm_contact"):
-                st.warning("Confirmar remoção do contato?")
-                cc1, cc2 = st.columns([0.2, 0.2], gap="small")
-                with cc1:
-                    if st.button("✅", help="Confirmar", use_container_width=True, key="btn_ct_rm_yes"):
-                        cid = dfc[(dfc["responsavel"] == resp_sel) & (dfc["contato_nome"] == nome_sel)]["id"].iloc[0]
-                        delete_contato_responsavel(int(cid))
-                        st.session_state.pop("confirm_rm_contact", None)
-                        st.toast("Contato removido ✅")
-                        st.rerun()
-                with cc2:
-                    if st.button("❌", help="Cancelar", use_container_width=True, key="btn_ct_rm_no"):
-                        st.session_state.pop("confirm_rm_contact", None)
+        row = df_view[(df_view["Responsável"] == resp_sel) & (df_view["Nome"] == nome_sel)].iloc[0]
+        telefone = row["Telefone"]
+        link = f"https://web.whatsapp.com/send?phone=55{''.join(filter(str.isdigit, str(telefone)))}"
+
+        # ✅ WhatsApp + Remover lado a lado (padronizado)
+        with a3:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            bwh, brm = st.columns(2, gap="small")
+            with bwh:
+                st.link_button("🟢", link, use_container_width=True)
+            with brm:
+                if st.button("🗑️", help="Remover contato selecionado", use_container_width=True, key="btn_ct_rm"):
+                    st.session_state["confirm_rm_contact"] = True
+
+        if st.session_state.get("confirm_rm_contact"):
+            st.warning("Confirmar remoção do contato?")
+            cc1, cc2 = st.columns([0.2, 0.2], gap="small")
+            with cc1:
+                if st.button("✅", help="Confirmar", use_container_width=True, key="btn_ct_rm_yes"):
+                    cid = dfc[(dfc["responsavel"] == resp_sel) & (dfc["contato_nome"] == nome_sel)]["id"].iloc[0]
+                    delete_contato_responsavel(int(cid))
+                    st.session_state.pop("confirm_rm_contact", None)
+                    st.toast("Contato removido ✅")
+                    st.rerun()
+            with cc2:
+                if st.button("❌", help="Cancelar", use_container_width=True, key="btn_ct_rm_no"):
+                    st.session_state.pop("confirm_rm_contact", None)
 
 
 # =========================================================
-# PAGE: ARQUIVADOS (com Restaurar + Excluir por checkbox Sel)
+# PAGE: ARQUIVADOS (tabela igual ao Acompanhamento + botões em cima)
 # =========================================================
 else:
     st.title("🗄️ Arquivados")
-    st.markdown('<div class="small-muted">Marque Sel para Restaurar ou Excluir.</div>', unsafe_allow_html=True)
     st.divider()
 
     df_a = fetch_arquivados_casos()
@@ -1031,63 +1031,67 @@ else:
     else:
         df_a_show = pd.DataFrame(
             {
-                "Sel": [False] * len(df_a),
                 "Id": df_a["id"].astype(int),
+                "Origem": df_a.get("origem").fillna("-"),
                 "Nr Doc (Recebido)": df_a["nr_doc_recebido"].fillna("-"),
                 "Assunto (Documento)": df_a["assunto_doc"].fillna("-"),
-                "Assunto (Solicitação)": df_a.get("assunto_solic").fillna("-"),
-                "Origem": df_a.get("origem").fillna("-"),
                 "Prazo Final": pd.to_datetime(df_a.get("prazo_final"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
-                "Prazo OM": pd.to_datetime(df_a.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Nr Doc (Solicitado)": df_a.get("nr_doc_solicitado").fillna("-"),
+                "Assunto (Solicitação)": df_a.get("assunto_solic").fillna("-"),
+                "Prazo OM": pd.to_datetime(df_a.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Nr Doc (Resposta)": df_a.get("nr_doc_resposta").fillna("-"),
                 "Status": df_a.get("status").fillna("-"),
             }
         )
 
-        edited_arq = st.data_editor(
-            df_a_show,
-            key="arq_editor",
+        # botões em cima (como no Acompanhamento)
+        tL, tR1, tR2 = st.columns([1, 0.12, 0.12], gap="small")
+        with tL:
+            st.subheader("Arquivados")
+        with tR1:
+            btn_restaurar = st.button("↩️", help="Restaurar selecionado", type="primary", use_container_width=True, key="btn_arq_restore")
+        with tR2:
+            btn_excluir = st.button("🗑️", help="Excluir selecionado", use_container_width=True, key="btn_arq_del")
+
+        df_styled = df_a_show.style.apply(_row_style_acompanhamento, axis=1)
+
+        sel_arq = st.dataframe(
+            df_styled,
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "Sel": st.column_config.CheckboxColumn("Sel", width="small"),
-                "Id": st.column_config.NumberColumn("Id", disabled=True, width="small"),
-            },
-            disabled=["Id"],
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_arq",
         )
 
-        sel_ids = edited_arq[edited_arq["Sel"] == True]["Id"].tolist()  # noqa: E712
-        sel_ids = [int(x) for x in sel_ids if str(x).isdigit()]
+        selected_arch_id = None
+        if sel_arq and sel_arq.get("selection", {}).get("rows"):
+            idx = sel_arq["selection"]["rows"][0]
+            selected_arch_id = int(df_a_show.iloc[idx]["Id"])
 
-        b1, b2 = st.columns([0.2, 0.2], gap="small")
-        with b1:
-            if st.button("↩️", help="Restaurar selecionados", type="primary", use_container_width=True):
-                if not sel_ids:
-                    st.warning("Marque ao menos 1 item em Sel.")
-                else:
-                    for cid in sel_ids:
-                        unarchive_caso(int(cid))
-                    st.toast("Restaurado ✅")
-                    st.rerun()
+        if btn_restaurar:
+            if not selected_arch_id:
+                st.warning("Selecione uma linha na tabela.")
+            else:
+                unarchive_caso(int(selected_arch_id))
+                st.toast("Restaurado ✅")
+                st.rerun()
 
-        with b2:
-            if st.button("🗑️", help="Excluir selecionados", use_container_width=True):
-                if not sel_ids:
-                    st.warning("Marque ao menos 1 item em Sel.")
-                else:
-                    st.session_state["confirm_del_arch"] = sel_ids
+        if btn_excluir:
+            if not selected_arch_id:
+                st.warning("Selecione uma linha na tabela.")
+            else:
+                st.session_state["confirm_del_arch_one"] = int(selected_arch_id)
 
-        if st.session_state.get("confirm_del_arch"):
-            st.warning("Confirma EXCLUIR selecionados? (não pode desfazer)")
+        if st.session_state.get("confirm_del_arch_one"):
+            st.warning("Confirmar EXCLUIR? (não pode desfazer)")
             c1, c2 = st.columns([0.18, 0.18], gap="small")
             with c1:
-                if st.button("✅", use_container_width=True, key="btn_del_yes"):
-                    for cid in st.session_state["confirm_del_arch"]:
-                        delete_caso(int(cid))
-                    st.session_state.pop("confirm_del_arch", None)
+                if st.button("✅", use_container_width=True, key="btn_del_arch_yes"):
+                    delete_caso(int(st.session_state["confirm_del_arch_one"]))
+                    st.session_state.pop("confirm_del_arch_one", None)
                     st.toast("Excluído ✅")
                     st.rerun()
             with c2:
-                if st.button("❌", use_container_width=True, key="btn_del_no"):
-                    st.session_state.pop("confirm_del_arch", None)
+                if st.button("❌", use_container_width=True, key="btn_del_arch_no"):
+                    st.session_state.pop("confirm_del_arch_one", None)
