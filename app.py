@@ -26,13 +26,13 @@ st.markdown(
     """
 <style>
 /* ---------- Base ---------- */
-.block-container { padding-top: 1.6rem; padding-bottom: 2rem; max-width: 1400px; }
-h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.15rem; }
+.block-container { padding-top: 1.9rem; padding-bottom: 2rem; max-width: 1400px; }
+h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.25rem; }
 .small-muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
 
 /* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] { border-right: 1px solid rgba(49,51,63,0.10); }
-section[data-testid="stSidebar"] .block-container { padding-top: 1.0rem; }
+section[data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
 
 /* ---------- Metrics ---------- */
 div[data-testid="stMetric"]{
@@ -49,16 +49,13 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; 
 .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
   border-radius: 14px !important;
 }
-
-/* Botões padronizados (mesmo tamanho) */
 .stButton>button{
-  border-radius: 14px !important;
-  height: 42px !important;
-  padding: 0 14px !important;
-  border: 1px solid rgba(49,51,63,0.12) !important;
+  border-radius: 14px;
+  padding: 0.55rem 0.95rem;
+  border: 1px solid rgba(49,51,63,0.12);
 }
 .stButton>button:hover{
-  border: 1px solid rgba(49,51,63,0.22) !important;
+  border: 1px solid rgba(49,51,63,0.22);
 }
 
 /* ---------- Dataframes / Editors ---------- */
@@ -80,7 +77,7 @@ div[data-testid="stDataEditor"] table td {
 
 hr { border-color: rgba(49,51,63,0.10); }
 
-/* Badge */
+/* Badge (pendente/salvo) */
 .badge{
   display:inline-flex; align-items:center; gap:8px;
   padding: 6px 10px; border-radius: 999px;
@@ -216,7 +213,12 @@ def sidebar_layout() -> tuple[str, str]:
             st.markdown(f"**👤 {user.email}**")
 
         st.markdown("---")
-        st.text_input("Nome", key="dash_name", on_change=_on_change_dash_name)
+        st.text_input(
+            "Nome",
+            key="dash_name",
+            help="Este nome aparecerá no menu e no título principal.",
+            on_change=_on_change_dash_name,
+        )
         dash_title = (st.session_state.get("dash_name") or "Dashboard").strip() or "Dashboard"
 
         st.markdown("---")
@@ -226,10 +228,10 @@ def sidebar_layout() -> tuple[str, str]:
         st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("🔄", help="Atualizar", use_container_width=True):
+            if st.button("🔄 Atualizar", use_container_width=True):
                 st.rerun()
         with c2:
-            if st.button("🚪", help="Sair", use_container_width=True):
+            if st.button("🚪 Sair", use_container_width=True):
                 try:
                     get_supabase().auth.sign_out()
                 except Exception:
@@ -340,19 +342,6 @@ def archive_caso(caso_id: int):
     _sb_table("arquivados").upsert(payload, on_conflict="caso_id").execute()
 
 
-def unarchive_caso(caso_id: int):
-    _sb_table("arquivados").delete().eq("caso_id", int(caso_id)).execute()
-
-
-def delete_caso(caso_id: int):
-    # remove retornos
-    _sb_table("retornos_om").delete().eq("caso_id", int(caso_id)).execute()
-    # remove arquivado (se existir)
-    _sb_table("arquivados").delete().eq("caso_id", int(caso_id)).execute()
-    # remove caso
-    _sb_table("casos").delete().eq("id", int(caso_id)).execute()
-
-
 def fetch_arquivados_ids() -> set[int]:
     res = _sb_table("arquivados").select("caso_id").execute()
     data = res.data or []
@@ -441,8 +430,54 @@ def salvar_ou_atualizar_solicitacao(
 
 
 # =========================================================
-# Helpers
+# Contatos por responsável (tabela: responsaveis_contatos)
 # =========================================================
+def _only_digits_phone(s: str) -> str:
+    return re.sub(r"[^0-9]", "", s or "")
+
+
+def _wa_web_link(phone_digits: str, text: str = "") -> str:
+    phone_digits = _only_digits_phone(phone_digits)
+    if not phone_digits:
+        return "https://web.whatsapp.com/"
+    phone = phone_digits if phone_digits.startswith("55") else "55" + phone_digits
+    text_q = (text or "").replace(" ", "%20").replace("\n", "%0A")
+    return f"https://web.whatsapp.com/send?phone={phone}&text={text_q}"
+
+
+def fetch_contatos_responsaveis() -> pd.DataFrame:
+    res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
+    return pd.DataFrame(res.data or [])
+
+
+def insert_contato_responsavel(responsavel: str, contato_nome: str, telefone: str):
+    user = st.session_state["sb_user"]
+    payload = {
+        "owner_id": user.id,
+        "responsavel": (responsavel or "").strip(),
+        "contato_nome": (contato_nome or "").strip(),
+        "telefone": (telefone or "").strip(),
+        "created_at": datetime.now().isoformat(),
+    }
+    _sb_table("responsaveis_contatos").insert(payload).execute()
+
+
+def delete_contato_responsavel(contato_id: int):
+    _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
+
+
+# =========================================================
+# Helpers UI
+# =========================================================
+def _fmt_date_iso_to_ddmmyyyy(v):
+    if not v:
+        return "-"
+    try:
+        return pd.to_datetime(v).strftime("%d/%m/%Y")
+    except Exception:
+        return "-"
+
+
 def _parse_ddmmyyyy_to_date(s: str):
     if not s or str(s).strip() in ["-", "NaT", "None"]:
         return None
@@ -486,7 +521,6 @@ def _apply_defaults_if_missing():
     st.session_state.setdefault("current_selected_id", None)
     st.session_state.setdefault("pending_select_id", None)
     st.session_state.setdefault("__clear_doc_box__", False)
-    st.session_state.setdefault("__clear_sel__", False)
 
     st.session_state.setdefault("doc_nr", "")
     st.session_state.setdefault("doc_assunto_doc", "")
@@ -504,10 +538,6 @@ def _apply_defaults_if_missing():
 
 def _request_clear_doc_box():
     st.session_state["__clear_doc_box__"] = True
-
-
-def _request_clear_selection():
-    st.session_state["__clear_sel__"] = True
 
 
 def _apply_clear_doc_box():
@@ -541,11 +571,7 @@ def _apply_load_selected_into_doc_box(caso_id: int):
 def build_msg_cobranca(caso: dict, ret: pd.DataFrame) -> str:
     assunto = caso.get("assunto_solic") or "-"
     nr = caso.get("nr_doc_solicitado") or "-"
-    prazo = "-"
-    try:
-        prazo = pd.to_datetime(caso.get("prazo_om")).strftime("%d/%m/%Y") if caso.get("prazo_om") else "-"
-    except Exception:
-        prazo = "-"
+    prazo = _fmt_date_iso_to_ddmmyyyy(caso.get("prazo_om"))
 
     pendentes = []
     if ret is not None and not ret.empty:
@@ -580,46 +606,6 @@ require_auth()
 page, dash_title = sidebar_layout()
 _apply_defaults_if_missing()
 
-# =========================================================
-# Pre-processar seleção via checkbox (antes de renderizar a caixa Documento)
-# =========================================================
-# Limpar seleção (solicitado por botão "Limpar")
-if st.session_state.pop("__clear_sel__", False):
-    if "acomp_editor" in st.session_state and isinstance(st.session_state["acomp_editor"], pd.DataFrame):
-        tmp = st.session_state["acomp_editor"].copy()
-        if "Sel" in tmp.columns:
-            tmp["Sel"] = False
-        st.session_state["acomp_editor"] = tmp
-    st.session_state["current_selected_id"] = None
-    st.session_state["pending_select_id"] = None
-
-# Se o usuário marcou checkbox na tabela (data_editor), aplicar seleção aqui
-if "acomp_editor" in st.session_state and isinstance(st.session_state["acomp_editor"], pd.DataFrame):
-    df_ed = st.session_state["acomp_editor"]
-    if "Sel" in df_ed.columns and "Id" in df_ed.columns:
-        sel_ids = df_ed[df_ed["Sel"] == True]["Id"].tolist()  # noqa: E712
-        sel_ids = [int(x) for x in sel_ids if str(x).isdigit()]
-        # manter seleção única
-        if len(sel_ids) > 1:
-            keep = sel_ids[0]
-            tmp = df_ed.copy()
-            tmp["Sel"] = tmp["Id"].apply(lambda x: int(x) == keep)
-            st.session_state["acomp_editor"] = tmp
-            sel_ids = [keep]
-            st.rerun()
-
-        if len(sel_ids) == 1:
-            new_id = sel_ids[0]
-            if st.session_state.get("current_selected_id") != new_id:
-                st.session_state["pending_select_id"] = new_id
-                st.rerun()
-        else:
-            # desmarcou tudo -> limpa campos
-            if st.session_state.get("current_selected_id") is not None:
-                st.session_state["current_selected_id"] = None
-                _apply_clear_doc_box()
-
-# aplicar clear/load antes de widgets
 if st.session_state.pop("__clear_doc_box__", False):
     _apply_clear_doc_box()
     st.session_state["current_selected_id"] = None
@@ -633,7 +619,7 @@ if pending is not None:
 
 
 # =========================================================
-# PAGE: DASHBOARD
+# PAGE: DASHBOARD  (SEM MEXER NA TABELA DE ACOMPANHAMENTO)
 # =========================================================
 if page == f"📋 {dash_title}":
     hoje = date.today()
@@ -662,9 +648,6 @@ if page == f"📋 {dash_title}":
     k4.metric("Hoje", hoje.strftime("%d/%m/%Y"))
     st.divider()
 
-    # =========================
-    # Documento (sempre FECHADO)
-    # =========================
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
 
@@ -675,6 +658,7 @@ if page == f"📋 {dash_title}":
                 st.text_input("Nr (Recebido)", key="doc_nr")
             with a2:
                 st.text_input("Origem", key="doc_origem")
+
             st.text_input("Assunto (Documento)", key="doc_assunto_doc")
             st.date_input("Prazo Final", key="doc_prazo_final", value=None, format="DD/MM/YYYY")
             st.text_area("Obs (Documento)", key="doc_obs", height=110)
@@ -687,6 +671,7 @@ if page == f"📋 {dash_title}":
                 st.text_input("Nr (Solicitado)", key="sol_doc_solicitado")
             with b2:
                 st.date_input("Prazo OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
+
             st.markdown("##### Responsáveis")
             oms = get_master_oms()
             st.multiselect("Responsáveis", options=oms, key="sol_responsaveis", label_visibility="collapsed")
@@ -695,105 +680,99 @@ if page == f"📋 {dash_title}":
             st.markdown("##### Resposta")
             st.text_input("Nr (Resposta)", key="resp_nr_doc_resposta")
 
-            # micro-layout dos botões (emoji + help)
-            b_save, b_clear = st.columns(2, gap="small")
-            with b_save:
-                if st.button("💾", help="Salvar", type="primary", use_container_width=True, key="btn_save_all"):
-                    sel_id = st.session_state.get("current_selected_id")
+            if st.button("Salvar", type="primary", key="btn_save_all", use_container_width=True):
+                sel_id = st.session_state.get("current_selected_id")
 
-                    nr_doc = (st.session_state.get("doc_nr") or "").strip()
-                    assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
-                    origem = (st.session_state.get("doc_origem") or "").strip()
-                    prazo_final = st.session_state.get("doc_prazo_final")
-                    obs_doc = (st.session_state.get("doc_obs") or "").strip()
+                nr_doc = (st.session_state.get("doc_nr") or "").strip()
+                assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
+                origem = (st.session_state.get("doc_origem") or "").strip()
+                prazo_final = st.session_state.get("doc_prazo_final")
+                obs_doc = (st.session_state.get("doc_obs") or "").strip()
 
-                    assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
-                    prazo_om = st.session_state.get("sol_prazo_om")
-                    nr_solic = (st.session_state.get("sol_doc_solicitado") or "").strip()
-                    responsaveis = st.session_state.get("sol_responsaveis") or []
+                assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
+                prazo_om = st.session_state.get("sol_prazo_om")
+                nr_solic = (st.session_state.get("sol_doc_solicitado") or "").strip()
+                responsaveis = st.session_state.get("sol_responsaveis") or []
 
-                    nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
+                nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
 
-                    try:
-                        if sel_id:
-                            update_payload = {
-                                "nr_doc_recebido": nr_doc,
-                                "assunto_doc": assunto_doc,
-                                "origem": origem,
-                                "prazo_final": prazo_final.isoformat() if prazo_final else None,
-                                "observacoes": obs_doc,
-                                "assunto_solic": assunto_solic or None,
-                                "prazo_om": prazo_om.isoformat() if prazo_om else None,
-                                "nr_doc_solicitado": nr_solic or None,
-                            }
-                            update_caso_by_id_safe(int(sel_id), update_payload)
+                try:
+                    if sel_id:
+                        update_payload = {
+                            "nr_doc_recebido": nr_doc,
+                            "assunto_doc": assunto_doc,
+                            "origem": origem,
+                            "prazo_final": prazo_final.isoformat() if prazo_final else None,
+                            "observacoes": obs_doc,
+                            "assunto_solic": assunto_solic or None,
+                            "prazo_om": prazo_om.isoformat() if prazo_om else None,
+                            "nr_doc_solicitado": nr_solic or None,
+                        }
+                        update_caso_by_id_safe(int(sel_id), update_payload)
+
+                        if assunto_solic or nr_solic or prazo_om or responsaveis:
+                            salvar_ou_atualizar_solicitacao(
+                                caso_id=int(sel_id),
+                                assunto_solic=assunto_solic or None,
+                                prazo_om=prazo_om,
+                                selecionadas=responsaveis,
+                                nr_doc_solicitado=nr_solic or "00",
+                            )
+
+                        set_resposta_e_status(int(sel_id), nr_resp)
+                        st.toast("Atualizado ✅")
+                        st.rerun()
+                    else:
+                        if nr_doc or assunto_doc or origem or prazo_final or obs_doc:
+                            new_id = insert_documento_safe(
+                                nr_doc=nr_doc,
+                                assunto_doc=assunto_doc,
+                                origem=origem or None,
+                                prazo_final=prazo_final,
+                                obs=obs_doc or None,
+                            )
+
                             if assunto_solic or nr_solic or prazo_om or responsaveis:
                                 salvar_ou_atualizar_solicitacao(
-                                    caso_id=int(sel_id),
+                                    caso_id=int(new_id),
                                     assunto_solic=assunto_solic or None,
                                     prazo_om=prazo_om,
                                     selecionadas=responsaveis,
                                     nr_doc_solicitado=nr_solic or "00",
                                 )
-                            set_resposta_e_status(int(sel_id), nr_resp)
-                            st.toast("Atualizado ✅")
-                            st.rerun()
-                        else:
-                            if nr_doc or assunto_doc or origem or prazo_final or obs_doc:
-                                new_id = insert_documento_safe(
-                                    nr_doc=nr_doc,
-                                    assunto_doc=assunto_doc,
-                                    origem=origem or None,
-                                    prazo_final=prazo_final,
-                                    obs=obs_doc or None,
-                                )
-                                if assunto_solic or nr_solic or prazo_om or responsaveis:
-                                    salvar_ou_atualizar_solicitacao(
-                                        caso_id=int(new_id),
-                                        assunto_solic=assunto_solic or None,
-                                        prazo_om=prazo_om,
-                                        selecionadas=responsaveis,
-                                        nr_doc_solicitado=nr_solic or "00",
-                                    )
-                                set_resposta_e_status(int(new_id), nr_resp)
+                            set_resposta_e_status(int(new_id), nr_resp)
 
-                                # marcar selecionado na tabela ao voltar
-                                st.session_state["pending_select_id"] = int(new_id)
-                                st.toast("Salvo ✅")
-                                st.rerun()
-                            elif assunto_solic:
-                                new_id = insert_solicitacao_sem_documento(
+                            st.session_state["pending_select_id"] = int(new_id)
+                            st.toast("Salvo ✅")
+                            st.rerun()
+                        elif assunto_solic:
+                            new_id = insert_solicitacao_sem_documento(
+                                assunto_solic=assunto_solic,
+                                prazo_om=prazo_om,
+                                nr_doc_solicitado=nr_solic or "00",
+                            )
+                            if responsaveis:
+                                salvar_ou_atualizar_solicitacao(
+                                    caso_id=int(new_id),
                                     assunto_solic=assunto_solic,
                                     prazo_om=prazo_om,
+                                    selecionadas=responsaveis,
                                     nr_doc_solicitado=nr_solic or "00",
                                 )
-                                if responsaveis:
-                                    salvar_ou_atualizar_solicitacao(
-                                        caso_id=int(new_id),
-                                        assunto_solic=assunto_solic,
-                                        prazo_om=prazo_om,
-                                        selecionadas=responsaveis,
-                                        nr_doc_solicitado=nr_solic or "00",
-                                    )
-                                set_resposta_e_status(int(new_id), nr_resp)
+                            set_resposta_e_status(int(new_id), nr_resp)
 
-                                st.session_state["pending_select_id"] = int(new_id)
-                                st.toast("Salvo ✅")
-                                st.rerun()
-                            else:
-                                st.error("Preencha algum campo do Documento ou o Assunto da Solicitação para salvar.")
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
+                            st.session_state["pending_select_id"] = int(new_id)
+                            st.toast("Salvo ✅")
+                            st.rerun()
+                        else:
+                            st.error("Preencha algum campo do Documento ou o Assunto da Solicitação para salvar um novo item.")
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
-            with b_clear:
-                if st.button("🧹", help="Limpar", use_container_width=True, key="btn_clear_doc"):
-                    _request_clear_doc_box()
-                    _request_clear_selection()  # ✅ também desmarca checkbox
-                    st.rerun()
+            if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
+                _request_clear_doc_box()
+                st.rerun()
 
-    # =========================
-    # Acompanhamento (agora com checkbox)
-    # =========================
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
@@ -802,7 +781,6 @@ if page == f"📋 {dash_title}":
 
         df_show = pd.DataFrame(
             {
-                "Sel": [False] * len(df_acomp),
                 "Id": df_acomp["id"].astype(int),
                 "Origem": df_acomp.get("origem").fillna("-"),
                 "Nr Doc (Recebido)": df_acomp["nr_doc_recebido"].fillna("-"),
@@ -817,45 +795,46 @@ if page == f"📋 {dash_title}":
             }
         )
 
-        # manter seleção visual no editor conforme current_selected_id
-        cur = st.session_state.get("current_selected_id")
-        if cur is not None:
-            df_show["Sel"] = df_show["Id"].apply(lambda x: int(x) == int(cur))
+        topL, topR = st.columns([1, 0.22])
+        with topL:
+            st.subheader("Acompanhamento")
+        with topR:
+            st.markdown("<div style='padding-top:6px'></div>", unsafe_allow_html=True)
+            btn_arquivar = st.button("🗄️ Arquivar", type="primary", key="dash_btn_arquivar")
 
-        st.subheader("Acompanhamento")
-
-        edited_acomp = st.data_editor(
-            df_show,
-            key="acomp_editor",
+        df_styled = df_show.style.apply(_row_style_acompanhamento, axis=1)
+        sel = st.dataframe(
+            df_styled,
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "Sel": st.column_config.CheckboxColumn("Sel", width="small"),
-                "Id": st.column_config.NumberColumn("Id", disabled=True, width="small"),
-                "Pendências (Qtd)": st.column_config.NumberColumn("Pendências (Qtd)", disabled=True, width="small"),
-            },
-            disabled=["Id", "Pendências (Qtd)"],
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tbl_dash",
         )
 
-        # Botão arquivar do item selecionado (mantido)
-        cA, cB = st.columns([0.18, 0.82], gap="small")
-        with cA:
-            if st.button("🗄️", help="Arquivar selecionado", type="primary", use_container_width=True, key="dash_btn_arquivar"):
-                sel_ids = edited_acomp[edited_acomp["Sel"] == True]["Id"].tolist()  # noqa: E712
-                if len(sel_ids) != 1:
-                    st.warning("Marque apenas 1 item em Sel.")
-                else:
-                    archive_caso(int(sel_ids[0]))
-                    st.toast("Arquivado ✅")
-                    _request_clear_doc_box()
-                    _request_clear_selection()
-                    st.rerun()
+        clicked_id = None
+        if sel and sel.get("selection", {}).get("rows"):
+            idx = sel["selection"]["rows"][0]
+            clicked_id = int(df_show.iloc[idx]["Id"])
 
-        # ✅ Só mostra Mensagem/Responsável quando checkbox selecionado
-        if st.session_state.get("current_selected_id") is not None:
-            selected_id = int(st.session_state["current_selected_id"])
-            caso = fetch_caso(selected_id) or {}
-            ret = fetch_retornos(selected_id)
+        current_id = st.session_state.get("current_selected_id")
+        if clicked_id is not None and clicked_id != current_id:
+            st.session_state["pending_select_id"] = int(clicked_id)
+            st.rerun()
+
+        selected_id = st.session_state.get("current_selected_id")
+
+        if btn_arquivar and selected_id:
+            archive_caso(int(selected_id))
+            st.toast("Arquivado ✅")
+            _request_clear_doc_box()
+            st.rerun()
+        elif btn_arquivar and not selected_id:
+            st.warning("Selecione uma linha na tabela.")
+
+        if selected_id:
+            caso = fetch_caso(int(selected_id)) or {}
+            ret = fetch_retornos(int(selected_id))
 
             with st.expander("Mensagem", expanded=False):
                 msg_key = f"msg_edit_{selected_id}"
@@ -913,14 +892,14 @@ if page == f"📋 {dash_title}":
                         else:
                             st.markdown('<span class="badge badge-ok">✅ Tudo salvo</span>', unsafe_allow_html=True)
                     with a2:
-                        if dirty and st.button("💾", help="Salvar alterações", type="primary", use_container_width=True, key=f"btn_save_ret_{selected_id}"):
+                        if dirty and st.button("Salvar alterações", type="primary", key=f"btn_save_ret_{selected_id}", use_container_width=True):
                             st.session_state[f"confirm_save_ret_{selected_id}"] = True
 
                     if st.session_state.get(f"confirm_save_ret_{selected_id}"):
-                        st.warning("Confirma salvar?")
-                        cc1, cc2 = st.columns([0.2, 0.2], gap="small")
+                        st.warning("Confirma salvar as alterações em Responsável?")
+                        cc1, cc2 = st.columns([0.22, 0.78], gap="small")
                         with cc1:
-                            if st.button("✅", use_container_width=True, key=f"btn_confirm_save_ret_{selected_id}"):
+                            if st.button("Confirmar", key=f"btn_confirm_save_ret_{selected_id}"):
                                 for i, row in edited.reset_index(drop=True).iterrows():
                                     rid = retorno_ids[i]
                                     disp = (row.get("Status") or STATUS_DISPLAY["Pendente"]).strip()
@@ -930,15 +909,16 @@ if page == f"📋 {dash_title}":
 
                                 st.session_state[orig_key] = _snapshot_from_editor(edited)
                                 st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
-                                st.toast("✅")
+                                st.toast("Alterações salvas ✅")
                                 st.rerun()
                         with cc2:
-                            if st.button("❌", use_container_width=True, key=f"btn_cancel_save_ret_{selected_id}"):
+                            if st.button("Cancelar", key=f"btn_cancel_save_ret_{selected_id}"):
                                 st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
+                                st.info("Salvamento cancelado.")
 
 
 # =========================================================
-# PAGE: RESPONSÁVEL (mantida como você está usando)
+# PAGE: RESPONSÁVEL
 # =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
@@ -997,7 +977,7 @@ elif page == "👥 Responsável":
                     st.session_state["ct_tel_in"] = ""
                     st.rerun()
         with a2:
-            st.markdown("<div class='small-muted'>Você pode cadastrar mais de um contato para o mesmo responsável.</div>", unsafe_allow_html=True)
+            st.markdown("<div class='small-muted'>Dica: você pode cadastrar mais de um contato para o mesmo responsável.</div>", unsafe_allow_html=True)
 
     dfc = fetch_contatos_responsaveis()
     if dfc.empty:
@@ -1007,12 +987,48 @@ elif page == "👥 Responsável":
         df_view.columns = ["Responsável", "Nome", "Telefone"]
         st.dataframe(df_view, use_container_width=True, hide_index=True)
 
+        st.markdown("#### Ações")
+        a1, a2, a3 = st.columns([1.1, 1.2, 0.7], gap="small")
+        with a1:
+            resp_sel = st.selectbox("Responsável", options=sorted(df_view["Responsável"].unique()), key="act_resp")
+        with a2:
+            nomes = df_view[df_view["Responsável"] == resp_sel]["Nome"].tolist()
+            nome_sel = st.selectbox("Contato", options=nomes, key="act_nome")
+        with a3:
+            row = df_view[(df_view["Responsável"] == resp_sel) & (df_view["Nome"] == nome_sel)].iloc[0]
+            telefone = row["Telefone"]
+            link = f"https://web.whatsapp.com/send?phone=55{''.join(filter(str.isdigit, str(telefone)))}"
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            st.link_button("🟢", link, use_container_width=True)
+
+        rm1, rm2 = st.columns([0.25, 0.75], gap="small")
+        with rm1:
+            if st.button("🗑️", help="Remover contato selecionado", use_container_width=True, key="btn_ct_rm"):
+                st.session_state["confirm_rm_contact"] = True
+        with rm2:
+            if st.session_state.get("confirm_rm_contact"):
+                st.warning("Confirmar remoção do contato?")
+                cc1, cc2 = st.columns([0.2, 0.2], gap="small")
+                with cc1:
+                    if st.button("✅", help="Confirmar", use_container_width=True, key="btn_ct_rm_yes"):
+                        cid = dfc[
+                            (dfc["responsavel"] == resp_sel) &
+                            (dfc["contato_nome"] == nome_sel)
+                        ]["id"].iloc[0]
+                        delete_contato_responsavel(int(cid))
+                        st.session_state.pop("confirm_rm_contact", None)
+                        st.toast("Contato removido ✅")
+                        st.rerun()
+                with cc2:
+                    if st.button("❌", help="Cancelar", use_container_width=True, key="btn_ct_rm_no"):
+                        st.session_state.pop("confirm_rm_contact", None)
+
+
 # =========================================================
-# PAGE: ARQUIVADOS (com Restaurar e Excluir via checkbox)
+# PAGE: ARQUIVADOS  (SEM ALTERAR)
 # =========================================================
 else:
     st.title("🗄️ Arquivados")
-    st.markdown('<div class="small-muted">Marque Sel para Restaurar ou Excluir.</div>', unsafe_allow_html=True)
     st.divider()
 
     df_a = fetch_arquivados_casos()
@@ -1021,62 +1037,15 @@ else:
     else:
         df_a_show = pd.DataFrame(
             {
-                "Sel": [False] * len(df_a),
-                "Id": df_a["id"].astype(int),
-                "Origem": df_a.get("origem").fillna("-"),
                 "Nr Doc (Recebido)": df_a["nr_doc_recebido"].fillna("-"),
                 "Assunto (Documento)": df_a["assunto_doc"].fillna("-"),
-                "Prazo Final": pd.to_datetime(df_a.get("prazo_final"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
-                "Nr Doc (Solicitado)": df_a.get("nr_doc_solicitado").fillna("-"),
                 "Assunto (Solicitação)": df_a.get("assunto_solic").fillna("-"),
+                "Origem": df_a.get("origem").fillna("-"),
+                "Prazo Final": pd.to_datetime(df_a.get("prazo_final"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
                 "Prazo OM": pd.to_datetime(df_a.get("prazo_om"), errors="coerce").dt.strftime("%d/%m/%Y").fillna("-"),
+                "Nr Doc (Solicitado)": df_a.get("nr_doc_solicitado").fillna("-"),
                 "Nr Doc (Resposta)": df_a.get("nr_doc_resposta").fillna("-"),
                 "Status": df_a.get("status").fillna("-"),
             }
         )
-
-        edited_arq = st.data_editor(
-            df_a_show,
-            key="arq_editor",
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Sel": st.column_config.CheckboxColumn("Sel", width="small"),
-                "Id": st.column_config.NumberColumn("Id", disabled=True, width="small"),
-            },
-            disabled=["Id"],
-        )
-
-        sel_ids = edited_arq[edited_arq["Sel"] == True]["Id"].tolist()  # noqa: E712
-        sel_ids = [int(x) for x in sel_ids if str(x).isdigit()]
-
-        b1, b2, b3 = st.columns([0.18, 0.18, 0.64], gap="small")
-        with b1:
-            if st.button("↩️", help="Restaurar selecionados", type="primary", use_container_width=True, key="btn_restore"):
-                if not sel_ids:
-                    st.warning("Marque ao menos 1 item em Sel.")
-                else:
-                    for cid in sel_ids:
-                        unarchive_caso(int(cid))
-                    st.toast("Restaurado ✅")
-                    st.rerun()
-        with b2:
-            if st.button("🗑️", help="Excluir selecionados", use_container_width=True, key="btn_delete"):
-                if not sel_ids:
-                    st.warning("Marque ao menos 1 item em Sel.")
-                else:
-                    st.session_state["confirm_delete_arq"] = sel_ids
-
-        if st.session_state.get("confirm_delete_arq"):
-            st.warning("Confirmar EXCLUIR selecionados? (não pode desfazer)")
-            c1, c2 = st.columns([0.18, 0.18], gap="small")
-            with c1:
-                if st.button("✅", use_container_width=True, key="btn_del_yes"):
-                    for cid in st.session_state["confirm_delete_arq"]:
-                        delete_caso(int(cid))
-                    st.session_state.pop("confirm_delete_arq", None)
-                    st.toast("Excluído ✅")
-                    st.rerun()
-            with c2:
-                if st.button("❌", use_container_width=True, key="btn_del_no"):
-                    st.session_state.pop("confirm_delete_arq", None)
+        st.dataframe(df_a_show, use_container_width=True, hide_index=True)
