@@ -8,6 +8,46 @@ st.set_page_config(
     layout="wide",
 )
 
+st.markdown("""
+<style>
+.block-container { padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1280px; }
+h1, h2, h3 { letter-spacing: -0.3px; line-height: 1.1; }
+
+section[data-testid="stSidebar"] { border-right: 1px solid rgba(255,255,255,.08); }
+section[data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
+
+div[data-testid="stMetric"]{
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  padding: 14px 14px 10px 14px;
+  border-radius: 16px;
+}
+
+div[data-baseweb="input"] > div,
+div[data-baseweb="select"] > div,
+div[data-baseweb="textarea"] > div{
+  border-radius: 14px !important;
+  border: 1px solid rgba(255,255,255,.10) !important;
+  background: rgba(255,255,255,.03) !important;
+}
+
+.stButton button{
+  border-radius: 14px;
+  padding: .60rem 1rem;
+  font-weight: 700;
+}
+
+div[data-testid="stDataFrame"]{
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+hr { border-color: rgba(255,255,255,.10); }
+</style>
+""", unsafe_allow_html=True)
+
+
 from datetime import date, datetime
 import re
 import pandas as pd
