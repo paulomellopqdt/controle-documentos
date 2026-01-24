@@ -1,0 +1,142 @@
+/* ===============================
+   Controle de Docs - Streamlit CSS
+   (visual parecido com o Lovable)
+   =============================== */
+
+:root{
+  --bg: #f6f8fc;
+  --card: #ffffff;
+  --border: rgba(15, 23, 42, 0.10);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --text: #0f172a;
+  --muted: rgba(15, 23, 42, 0.60);
+
+  --primary: #2563eb;   /* azul */
+  --danger: #ef4444;    /* vermelho */
+  --warn: #f59e0b;      /* amarelo */
+  --success: #22c55e;   /* verde */
+}
+
+/* Fundo geral */
+.stApp{
+  background: var(--bg);
+}
+
+/* Ajuste de largura/padding */
+.block-container{
+  padding-top: 1.6rem;
+  padding-bottom: 2rem;
+  max-width: 1400px;
+}
+
+/* Títulos e subtítulos */
+h1, h2, h3{
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+[data-testid="stCaptionContainer"]{
+  color: var(--muted);
+}
+
+/* ===============================
+   Sidebar (escura, estilo Lovable)
+   =============================== */
+[data-testid="stSidebar"]{
+  background: linear-gradient(180deg, #0b1220 0%, #0a1020 100%);
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+[data-testid="stSidebar"] *{
+  color: rgba(255,255,255,0.92);
+}
+[data-testid="stSidebar"] a, 
+[data-testid="stSidebar"] a *{
+  color: rgba(255,255,255,0.92) !important;
+}
+
+/* “dividers” da sidebar mais suaves */
+[data-testid="stSidebar"] hr{
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+}
+
+/* Botões na sidebar */
+[data-testid="stSidebar"] .stButton>button{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  padding: 10px 12px;
+  transition: all 120ms ease;
+}
+[data-testid="stSidebar"] .stButton>button:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.16);
+}
+
+/* ===============================
+   Botões (geral)
+   =============================== */
+.stButton>button{
+  background: rgba(37, 99, 235, 0.10);
+  color: var(--primary);
+  border: 1px solid rgba(37, 99, 235, 0.20);
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-weight: 600;
+  transition: all 120ms ease;
+}
+.stButton>button:hover{
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.16);
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+/* ===============================
+   Cards / Containers
+   =============================== */
+[data-testid="stVerticalBlockBorderWrapper"]{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+/* Dá “cara de card” para colunas de métricas */
+.metric-card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+
+/* Texto pequeno e muted */
+.small-muted{
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+/* ===============================
+   Dataframe (tabela mais clean)
+   =============================== */
+[data-testid="stDataFrame"]{
+  background: var(--card);
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 8px;
+}
+
+/* Remover “bordas” excessivas */
+[data-testid="stDataFrame"] *{
+  border-color: rgba(15,23,42,0.08) !important;
+}
+
+/* ===============================
+   Inputs (text_input / selectbox)
+   =============================== */
+[data-baseweb="input"] input,
+[data-baseweb="select"] > div{
+  border-radius: 14px !important;
+}
