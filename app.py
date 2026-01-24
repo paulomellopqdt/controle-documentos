@@ -10,64 +10,208 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* ===== Layout geral ===== */
-.block-container {
-  padding-top: 1.4rem;
+/* ===============================
+   Controle de Docs - UI (Lovable-like)
+   Mantém 100% da lógica intacta
+   =============================== */
+
+:root{
+  --bg: #F6F8FC;
+  --card: #FFFFFF;
+  --text: #0F172A;
+  --muted: rgba(15, 23, 42, 0.62);
+  --border: rgba(15, 23, 42, 0.10);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+
+  --primary: #2563EB;
+  --danger: #EF4444;
+  --warn: #F59E0B;
+  --success: #22C55E;
+}
+
+/* Fundo do app */
+.stApp{
+  background: var(--bg);
+}
+
+/* Container principal */
+.block-container{
+  padding-top: 1.6rem;
   padding-bottom: 2rem;
-  max-width: 1280px;
-  background-color: #FFFFFF;
+  max-width: 1400px;
 }
 
-/* ===== Sidebar (escura) ===== */
-section[data-testid="stSidebar"] {
-  background-color: #0B1220;
-  border-right: 1px solid rgba(255,255,255,.08);
-}
-section[data-testid="stSidebar"] * {
-  color: #E6EAF2 !important;
-}
-
-/* ===== Títulos ===== */
-h1, h2, h3 {
-  letter-spacing: -0.3px;
+/* Tipografia */
+h1,h2,h3{
+  letter-spacing: -0.35px;
   line-height: 1.1;
-  color: #0F172A;
+  color: var(--text);
+  padding-top: 0.25rem;
+}
+.small-muted{
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
-/* ===== Cards / métricas ===== */
-div[data-testid="stMetric"]{
-  background: #F8FAFC;
-  border: 1px solid #E2E8F0;
-  padding: 14px 14px 10px 14px;
+/* ===============================
+   Sidebar (escura)
+   =============================== */
+section[data-testid="stSidebar"]{
+  background: linear-gradient(180deg, #0b1220 0%, #0a1020 100%);
+  border-right: 1px solid rgba(255,255,255,0.08);
+}
+section[data-testid="stSidebar"] .block-container{
+  padding-top: 1.2rem;
+}
+section[data-testid="stSidebar"] *{
+  color: rgba(255,255,255,0.92) !important;
+}
+section[data-testid="stSidebar"] hr{
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.10);
+}
+
+/* Radios (Menu) na sidebar: deixa mais “botão” */
+section[data-testid="stSidebar"] div[role="radiogroup"] label{
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+/* Botões na sidebar */
+section[data-testid="stSidebar"] .stButton>button{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: .60rem .95rem;
+  font-weight: 800;
+  transition: all 120ms ease;
+}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.18);
+}
+
+/* ===============================
+   Cards / Expander / Containers
+   =============================== */
+div[data-testid="stVerticalBlockBorderWrapper"]{
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 16px;
+  box-shadow: var(--shadow);
 }
 
-/* ===== Inputs ===== */
+/* Expander mais “card” */
+details[data-testid="stExpander"]{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+details[data-testid="stExpander"] > summary{
+  padding: 10px 14px;
+}
+
+/* ===============================
+   Métricas (st.metric)
+   =============================== */
+div[data-testid="stMetric"]{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 14px;
+  box-shadow: var(--shadow);
+}
+div[data-testid="stMetric"] label{
+  opacity: 0.75;
+}
+div[data-testid="stMetric"] [data-testid="stMetricValue"]{
+  font-size: 1.75rem;
+  font-weight: 800;
+}
+
+/* ===============================
+   Inputs
+   =============================== */
 div[data-baseweb="input"] > div,
 div[data-baseweb="select"] > div,
 div[data-baseweb="textarea"] > div{
   border-radius: 14px !important;
-  border: 1px solid #CBD5E1 !important;
+  border: 1px solid rgba(15,23,42,0.14) !important;
   background: #FFFFFF !important;
 }
 
-/* ===== Botões ===== */
-.stButton button{
+/* ===============================
+   Botões (geral)
+   =============================== */
+.stButton>button{
   border-radius: 14px;
   padding: .60rem 1rem;
-  font-weight: 700;
+  font-weight: 800;
+  border: 1px solid rgba(15,23,42,0.14);
+  background: rgba(37,99,235,0.10);
+  color: var(--primary);
+  transition: all 120ms ease;
+}
+.stButton>button:hover{
+  transform: translateY(-1px);
+  border-color: rgba(37,99,235,0.26);
+  background: rgba(37,99,235,0.16);
 }
 
-/* ===== Tabelas ===== */
-div[data-testid="stDataFrame"]{
-  border: 1px solid #E2E8F0;
+/* Botões primary do Streamlit */
+button[kind="primary"]{
+  background: var(--primary) !important;
+  color: #FFFFFF !important;
+  border: 1px solid rgba(37,99,235,0.35) !important;
+}
+button[kind="primary"]:hover{
+  filter: brightness(0.97);
+}
+
+/* ===============================
+   DataFrames / DataEditor
+   =============================== */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
+  border: 1px solid var(--border);
   border-radius: 16px;
   overflow: hidden;
-  background: #FFFFFF;
+  background: var(--card);
+  box-shadow: var(--shadow);
 }
 
-/* ===== Separadores ===== */
-hr { border-color: #E2E8F0; }
+/* Centralizar cabeçalho e células (você já faz isso) */
+div[data-testid="stDataFrame"] table th,
+div[data-testid="stDataFrame"] table td,
+div[data-testid="stDataEditor"] table th,
+div[data-testid="stDataEditor"] table td{
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+/* Separadores */
+hr{
+  border-color: rgba(15,23,42,0.10);
+}
+
+/* Badges (você já usa .badge) */
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border:1px solid rgba(15,23,42,0.12);
+}
+.badge-warn{ background: rgba(245,158,11,0.14); color: #854d0e; }
+.badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -82,78 +226,6 @@ from supabase import create_client, Client
 RETORNO_STATUS = ["Pendente", "Respondido"]
 STATUS_DISPLAY = {"Pendente": "🔴 Pendente", "Respondido": "🟢 Respondido"}
 DISPLAY_TO_STATUS = {v: k for k, v in STATUS_DISPLAY.items()}
-
-
-# =========================================================
-# CSS
-# =========================================================
-st.markdown(
-    """
-<style>
-/* ---------- Base ---------- */
-.block-container { padding-top: 1.9rem; padding-bottom: 2rem; max-width: 1400px; }
-h1, h2, h3 { letter-spacing: -0.4px; line-height: 1.15; padding-top: 0.25rem; }
-.small-muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
-
-/* ---------- Sidebar ---------- */
-section[data-testid="stSidebar"] { border-right: 1px solid rgba(49,51,63,0.10); }
-section[data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
-
-/* ---------- Metrics ---------- */
-div[data-testid="stMetric"]{
-  background: rgba(255,255,255,0.85);
-  border: 1px solid rgba(49,51,63,0.10);
-  border-radius: 16px;
-  padding: 14px 14px;
-  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.05);
-}
-div[data-testid="stMetric"] label { opacity: 0.75; }
-div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.65rem; }
-
-/* ---------- Inputs / Buttons ---------- */
-.stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
-  border-radius: 14px !important;
-}
-.stButton>button{
-  border-radius: 14px;
-  padding: 0.55rem 0.95rem;
-  border: 1px solid rgba(49,51,63,0.12);
-}
-.stButton>button:hover{
-  border: 1px solid rgba(49,51,63,0.22);
-}
-
-/* ---------- Dataframes / Editors ---------- */
-div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
-  border: 1px solid rgba(49,51,63,0.10);
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.04);
-}
-
-/* Centralizar cabeçalho e células */
-div[data-testid="stDataFrame"] table th,
-div[data-testid="stDataFrame"] table td,
-div[data-testid="stDataEditor"] table th,
-div[data-testid="stDataEditor"] table td {
-  text-align: center !important;
-  vertical-align: middle !important;
-}
-
-hr { border-color: rgba(49,51,63,0.10); }
-
-/* Badge (pendente/salvo) */
-.badge{
-  display:inline-flex; align-items:center; gap:8px;
-  padding: 6px 10px; border-radius: 999px;
-  font-size: 0.85rem; border:1px solid rgba(49,51,63,0.12);
-}
-.badge-warn{ background: rgba(234,179,8,0.14); color: #854d0e; }
-.badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
 
 
 # =========================================================
