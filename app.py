@@ -1,20 +1,31 @@
 from __future__ import annotations
 
-import streamlit as st
+import re
+from contextlib import contextmanager
+from datetime import date, datetime
 
+import pandas as pd
+import streamlit as st
+from supabase import Client, create_client
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
     page_title="Controle de Docs",
     page_icon="icon.png",
     layout="wide",
 )
 
-st.markdown("""
+# =========================================================
+# UI / CSS (ÚNICO) — mantém 100% da lógica intacta
+# - Sidebar escura (Lovable-like)
+# - Cards mais clean
+# - Inputs com borda mais fina (sem “grosso”)
+# =========================================================
+st.markdown(
+    """
 <style>
-/* ===============================
-   Controle de Docs - UI (Lovable-like)
-   Mantém 100% da lógica intacta
-   =============================== */
-
 :root{
   --bg: #F6F8FC;
   --card: #FFFFFF;
@@ -22,19 +33,13 @@ st.markdown("""
   --muted: rgba(15, 23, 42, 0.62);
   --border: rgba(15, 23, 42, 0.10);
   --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-
   --primary: #2563EB;
-  --danger: #EF4444;
-  --warn: #F59E0B;
-  --success: #22C55E;
 }
 
-/* Fundo do app */
-.stApp{
-  background: var(--bg);
-}
+/* Fundo */
+.stApp{ background: var(--bg); }
 
-/* Container principal */
+/* Container */
 .block-container{
   padding-top: 1.6rem;
   padding-bottom: 2rem;
@@ -48,31 +53,22 @@ h1,h2,h3{
   color: var(--text);
   padding-top: 0.25rem;
 }
-.small-muted{
-  color: var(--muted);
-  font-size: 0.92rem;
-}
+.small-muted{ color: var(--muted); font-size: 0.92rem; }
 
-/* ===============================
-   Sidebar (escura)
-   =============================== */
+/* Sidebar escura */
 section[data-testid="stSidebar"]{
   background: linear-gradient(180deg, #0b1220 0%, #0a1020 100%);
   border-right: 1px solid rgba(255,255,255,0.08);
 }
-section[data-testid="stSidebar"] .block-container{
-  padding-top: 1.2rem;
-}
-section[data-testid="stSidebar"] *{
-  color: rgba(255,255,255,0.92) !important;
-}
+section[data-testid="stSidebar"] .block-container{ padding-top: 1.2rem; }
+section[data-testid="stSidebar"] *{ color: rgba(255,255,255,0.92) !important; }
 section[data-testid="stSidebar"] hr{
   border: none;
   height: 1px;
   background: rgba(255,255,255,0.10);
 }
 
-/* Radios (Menu) na sidebar: deixa mais “botão” */
+/* Radios do menu (hover suave) */
 section[data-testid="stSidebar"] div[role="radiogroup"] label{
   border-radius: 12px;
   padding: 8px 10px;
@@ -96,9 +92,7 @@ section[data-testid="stSidebar"] .stButton>button:hover{
   border-color: rgba(255,255,255,0.18);
 }
 
-/* ===============================
-   Cards / Expander / Containers
-   =============================== */
+/* Containers com borda (st.container(border=True)) / Expander */
 div[data-testid="stVerticalBlockBorderWrapper"]{
   background: var(--card);
   border: 1px solid var(--border);
@@ -114,13 +108,9 @@ details[data-testid="stExpander"]{
   box-shadow: var(--shadow);
   overflow: hidden;
 }
-details[data-testid="stExpander"] > summary{
-  padding: 10px 14px;
-}
+details[data-testid="stExpander"] > summary{ padding: 10px 14px; }
 
-/* ===============================
-   Métricas (st.metric)
-   =============================== */
+/* Métricas */
 div[data-testid="stMetric"]{
   background: var(--card);
   border: 1px solid var(--border);
@@ -128,28 +118,29 @@ div[data-testid="stMetric"]{
   padding: 14px 14px;
   box-shadow: var(--shadow);
 }
-div[data-testid="stMetric"] label{
-  opacity: 0.75;
-}
+div[data-testid="stMetric"] label{ opacity: 0.75; }
 div[data-testid="stMetric"] [data-testid="stMetricValue"]{
   font-size: 1.75rem;
   font-weight: 800;
 }
 
-/* ===============================
-   Inputs
-   =============================== */
+/* Inputs (borda MAIS FINA e foco suave) */
 div[data-baseweb="input"] > div,
 div[data-baseweb="select"] > div,
 div[data-baseweb="textarea"] > div{
   border-radius: 14px !important;
-  border: 1px solid rgba(15,23,42,0.14) !important;
+  border: 1px solid rgba(15,23,42,0.10) !important;
   background: #FFFFFF !important;
+  box-shadow: none !important;
+}
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within{
+  border-color: rgba(37,99,235,0.28) !important;
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.10) !important;
 }
 
-/* ===============================
-   Botões (geral)
-   =============================== */
+/* Botões (geral) */
 .stButton>button{
   border-radius: 14px;
   padding: .60rem 1rem;
@@ -164,20 +155,13 @@ div[data-baseweb="textarea"] > div{
   border-color: rgba(37,99,235,0.26);
   background: rgba(37,99,235,0.16);
 }
-
-/* Botões primary do Streamlit */
 button[kind="primary"]{
   background: var(--primary) !important;
   color: #FFFFFF !important;
   border: 1px solid rgba(37,99,235,0.35) !important;
 }
-button[kind="primary"]:hover{
-  filter: brightness(0.97);
-}
 
-/* ===============================
-   DataFrames / DataEditor
-   =============================== */
+/* Dataframes / Editor */
 div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -185,8 +169,6 @@ div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
   background: var(--card);
   box-shadow: var(--shadow);
 }
-
-/* Centralizar cabeçalho e células (você já faz isso) */
 div[data-testid="stDataFrame"] table th,
 div[data-testid="stDataFrame"] table td,
 div[data-testid="stDataEditor"] table th,
@@ -196,37 +178,24 @@ div[data-testid="stDataEditor"] table td{
 }
 
 /* Separadores */
-hr{
-  border-color: rgba(15,23,42,0.10);
-}
+hr{ border-color: rgba(15,23,42,0.10); }
 
-/* Badges (você já usa .badge) */
+/* Badges */
 .badge{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.85rem;
-  border:1px solid rgba(15,23,42,0.12);
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 6px 10px; border-radius: 999px;
+  font-size: 0.85rem; border:1px solid rgba(15,23,42,0.12);
 }
 .badge-warn{ background: rgba(245,158,11,0.14); color: #854d0e; }
 .badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
 </style>
-""", unsafe_allow_html=True)
-
-
-
-from datetime import date, datetime
-import re
-import pandas as pd
-from supabase import create_client, Client
-
+""",
+    unsafe_allow_html=True,
+)
 
 RETORNO_STATUS = ["Pendente", "Respondido"]
 STATUS_DISPLAY = {"Pendente": "🔴 Pendente", "Respondido": "🟢 Respondido"}
 DISPLAY_TO_STATUS = {v: k for k, v in STATUS_DISPLAY.items()}
-
 
 # =========================================================
 # Supabase client
@@ -299,7 +268,10 @@ def require_auth():
         return
 
     st.title("🔐 Controle de Documentos — Login")
-    st.markdown('<div class="small-muted">Acesse com sua conta para ver apenas seus dados.</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="small-muted">Acesse com sua conta para ver apenas seus dados.</div>',
+        unsafe_allow_html=True,
+    )
 
     tabs = st.tabs(["Entrar", "Criar conta"])
     sb = get_supabase()
@@ -380,6 +352,23 @@ def sidebar_layout() -> tuple[str, str]:
         st.caption("v1.0 • Streamlit + Supabase")
 
     return page, dash_title
+
+
+# =========================================================
+# UI helpers (cards por coluna sem mexer na lógica)
+# =========================================================
+@contextmanager
+def card_container():
+    """
+    Streamlit mais novo: st.container(border=True) gera um wrapper com borda (que nosso CSS deixa lindo).
+    Streamlit antigo: cai em st.container() sem quebrar nada.
+    """
+    try:
+        with st.container(border=True):
+            yield
+    except TypeError:
+        with st.container():
+            yield
 
 
 # =========================================================
@@ -651,8 +640,15 @@ def _row_style_acompanhamento(row):
 
 
 DOC_KEYS = [
-    "doc_nr", "doc_assunto_doc", "doc_origem", "doc_prazo_final", "doc_obs",
-    "sol_assunto_solic", "sol_prazo_om", "sol_doc_solicitado", "sol_responsaveis",
+    "doc_nr",
+    "doc_assunto_doc",
+    "doc_origem",
+    "doc_prazo_final",
+    "doc_obs",
+    "sol_assunto_solic",
+    "sol_prazo_om",
+    "sol_doc_solicitado",
+    "sol_responsaveis",
     "resp_nr_doc_resposta",
 ]
 
@@ -757,9 +753,8 @@ if pending is not None:
     _apply_load_selected_into_doc_box(int(pending))
     st.session_state["pending_select_id"] = None
 
-
 # =========================================================
-# PAGE: DASHBOARD (Acompanhamento sem alteração)
+# PAGE: DASHBOARD (Acompanhamento sem alteração de lógica)
 # =========================================================
 if page == f"📋 {dash_title}":
     hoje = date.today()
@@ -791,109 +786,113 @@ if page == f"📋 {dash_title}":
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
 
+        # ✅ Cada coluna agora em um “card” (sem alterar lógica)
         with colA:
-            st.markdown("##### Documento")
-            a1, a2 = st.columns([1, 1], gap="small")
-            with a1:
-                st.text_input("Nr (Recebido)", key="doc_nr")
-            with a2:
-                st.text_input("Origem", key="doc_origem")
-            st.text_input("Assunto (Documento)", key="doc_assunto_doc")
-            st.date_input("Prazo Final", key="doc_prazo_final", value=None, format="DD/MM/YYYY")
-            st.text_area("Obs (Documento)", key="doc_obs", height=110)
+            with card_container():
+                st.markdown("##### Documento")
+                a1, a2 = st.columns([1, 1], gap="small")
+                with a1:
+                    st.text_input("Nr (Recebido)", key="doc_nr")
+                with a2:
+                    st.text_input("Origem", key="doc_origem")
+                st.text_input("Assunto (Documento)", key="doc_assunto_doc")
+                st.date_input("Prazo Final", key="doc_prazo_final", value=None, format="DD/MM/YYYY")
+                st.text_area("Obs (Documento)", key="doc_obs", height=110)
 
         with colB:
-            st.markdown("##### Solicitação")
-            st.text_input("Assunto (Solicitação)", key="sol_assunto_solic")
-            b1, b2 = st.columns(2, gap="small")
-            with b1:
-                st.text_input("Nr (Solicitado)", key="sol_doc_solicitado")
-            with b2:
-                st.date_input("Prazo OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
-            st.markdown("##### Responsáveis")
-            oms = get_master_oms()
-            st.multiselect("Responsáveis", options=oms, key="sol_responsaveis", label_visibility="collapsed")
+            with card_container():
+                st.markdown("##### Solicitação")
+                st.text_input("Assunto (Solicitação)", key="sol_assunto_solic")
+                b1, b2 = st.columns(2, gap="small")
+                with b1:
+                    st.text_input("Nr (Solicitado)", key="sol_doc_solicitado")
+                with b2:
+                    st.date_input("Prazo OM", key="sol_prazo_om", value=None, format="DD/MM/YYYY")
+                st.markdown("##### Responsáveis")
+                oms = get_master_oms()
+                st.multiselect("Responsáveis", options=oms, key="sol_responsaveis", label_visibility="collapsed")
 
         with colC:
-            st.markdown("##### Resposta")
-            st.text_input("Nr (Resposta)", key="resp_nr_doc_resposta")
+            with card_container():
+                st.markdown("##### Resposta")
+                st.text_input("Nr (Resposta)", key="resp_nr_doc_resposta")
 
-            if st.button("Salvar", type="primary", key="btn_save_all", use_container_width=True):
-                sel_id = st.session_state.get("current_selected_id")
+                if st.button("Salvar", type="primary", key="btn_save_all", use_container_width=True):
+                    sel_id = st.session_state.get("current_selected_id")
 
-                nr_doc = (st.session_state.get("doc_nr") or "").strip()
-                assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
-                origem = (st.session_state.get("doc_origem") or "").strip()
-                prazo_final = st.session_state.get("doc_prazo_final")
-                obs_doc = (st.session_state.get("doc_obs") or "").strip()
+                    nr_doc = (st.session_state.get("doc_nr") or "").strip()
+                    assunto_doc = (st.session_state.get("doc_assunto_doc") or "").strip()
+                    origem = (st.session_state.get("doc_origem") or "").strip()
+                    prazo_final = st.session_state.get("doc_prazo_final")
+                    obs_doc = (st.session_state.get("doc_obs") or "").strip()
 
-                assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
-                prazo_om = st.session_state.get("sol_prazo_om")
-                nr_solic = (st.session_state.get("sol_doc_solicitado") or "").strip()
-                responsaveis = st.session_state.get("sol_responsaveis") or []
-                nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
+                    assunto_solic = (st.session_state.get("sol_assunto_solic") or "").strip()
+                    prazo_om = st.session_state.get("sol_prazo_om")
+                    nr_solic = (st.session_state.get("sol_doc_solicitado") or "").strip()
+                    responsaveis = st.session_state.get("sol_responsaveis") or []
+                    nr_resp = (st.session_state.get("resp_nr_doc_resposta") or "").strip()
 
-                try:
-                    if sel_id:
-                        update_payload = {
-                            "nr_doc_recebido": nr_doc,
-                            "assunto_doc": assunto_doc,
-                            "origem": origem,
-                            "prazo_final": prazo_final.isoformat() if prazo_final else None,
-                            "observacoes": obs_doc,
-                            "assunto_solic": assunto_solic or None,
-                            "prazo_om": prazo_om.isoformat() if prazo_om else None,
-                            "nr_doc_solicitado": nr_solic or None,
-                        }
-                        update_caso_by_id_safe(int(sel_id), update_payload)
+                    try:
+                        if sel_id:
+                            update_payload = {
+                                "nr_doc_recebido": nr_doc,
+                                "assunto_doc": assunto_doc,
+                                "origem": origem,
+                                "prazo_final": prazo_final.isoformat() if prazo_final else None,
+                                "observacoes": obs_doc,
+                                "assunto_solic": assunto_solic or None,
+                                "prazo_om": prazo_om.isoformat() if prazo_om else None,
+                                "nr_doc_solicitado": nr_solic or None,
+                            }
+                            update_caso_by_id_safe(int(sel_id), update_payload)
 
-                        if assunto_solic or nr_solic or prazo_om or responsaveis:
-                            salvar_ou_atualizar_solicitacao(
-                                caso_id=int(sel_id),
-                                assunto_solic=assunto_solic or None,
-                                prazo_om=prazo_om,
-                                selecionadas=responsaveis,
-                                nr_doc_solicitado=nr_solic or "00",
-                            )
-
-                        set_resposta_e_status(int(sel_id), nr_resp)
-                        st.toast("Atualizado ✅")
-                        st.rerun()
-                    else:
-                        if nr_doc or assunto_doc or origem or prazo_final or obs_doc:
-                            new_id = insert_documento_safe(nr_doc, assunto_doc, origem or None, prazo_final, obs_doc or None)
                             if assunto_solic or nr_solic or prazo_om or responsaveis:
                                 salvar_ou_atualizar_solicitacao(
-                                    caso_id=int(new_id),
+                                    caso_id=int(sel_id),
                                     assunto_solic=assunto_solic or None,
                                     prazo_om=prazo_om,
                                     selecionadas=responsaveis,
                                     nr_doc_solicitado=nr_solic or "00",
                                 )
-                            set_resposta_e_status(int(new_id), nr_resp)
-                            st.session_state["pending_select_id"] = int(new_id)
-                            st.toast("Salvo ✅")
-                            st.rerun()
-                        elif assunto_solic:
-                            new_id = insert_solicitacao_sem_documento(assunto_solic, prazo_om, nr_solic or "00")
-                            if responsaveis:
-                                salvar_ou_atualizar_solicitacao(int(new_id), assunto_solic, prazo_om, responsaveis, nr_solic or "00")
-                            set_resposta_e_status(int(new_id), nr_resp)
-                            st.session_state["pending_select_id"] = int(new_id)
-                            st.toast("Salvo ✅")
+
+                            set_resposta_e_status(int(sel_id), nr_resp)
+                            st.toast("Atualizado ✅")
                             st.rerun()
                         else:
-                            st.error("Preencha algum campo para salvar.")
-                except Exception as e:
-                    st.error(f"Erro ao salvar: {e}")
+                            if nr_doc or assunto_doc or origem or prazo_final or obs_doc:
+                                new_id = insert_documento_safe(nr_doc, assunto_doc, origem or None, prazo_final, obs_doc or None)
+                                if assunto_solic or nr_solic or prazo_om or responsaveis:
+                                    salvar_ou_atualizar_solicitacao(
+                                        caso_id=int(new_id),
+                                        assunto_solic=assunto_solic or None,
+                                        prazo_om=prazo_om,
+                                        selecionadas=responsaveis,
+                                        nr_doc_solicitado=nr_solic or "00",
+                                    )
+                                set_resposta_e_status(int(new_id), nr_resp)
+                                st.session_state["pending_select_id"] = int(new_id)
+                                st.toast("Salvo ✅")
+                                st.rerun()
+                            elif assunto_solic:
+                                new_id = insert_solicitacao_sem_documento(assunto_solic, prazo_om, nr_solic or "00")
+                                if responsaveis:
+                                    salvar_ou_atualizar_solicitacao(int(new_id), assunto_solic, prazo_om, responsaveis, nr_solic or "00")
+                                set_resposta_e_status(int(new_id), nr_resp)
+                                st.session_state["pending_select_id"] = int(new_id)
+                                st.toast("Salvo ✅")
+                                st.rerun()
+                            else:
+                                st.error("Preencha algum campo para salvar.")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-            if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
-                # ✅ também deseleciona a linha no Acompanhamento
-                st.session_state.pop("tbl_dash", None)
-                st.session_state["current_selected_id"] = None
-                st.session_state["pending_select_id"] = None
-                _request_clear_doc_box()
-                st.rerun()
+                if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
+                    # ✅ também deseleciona a linha no Acompanhamento
+                    st.session_state.pop("tbl_dash", None)
+                    st.session_state["current_selected_id"] = None
+                    st.session_state["pending_select_id"] = None
+                    _request_clear_doc_box()
+                    st.rerun()
 
     # --------- ACOMPANHAMENTO (SEM ALTERAÇÃO) ----------
     if df_acomp.empty:
@@ -1130,7 +1129,6 @@ elif page == "👥 Responsável":
         telefone = row["Telefone"]
         link = f"https://web.whatsapp.com/send?phone=55{''.join(filter(str.isdigit, str(telefone)))}"
 
-        # ✅ WhatsApp + Remover lado a lado (padronizado)
         with a3:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
             bwh, brm = st.columns(2, gap="small")
@@ -1156,7 +1154,7 @@ elif page == "👥 Responsável":
 
 
 # =========================================================
-# PAGE: ARQUIVADOS (tabela igual ao Acompanhamento + botões em cima)
+# PAGE: ARQUIVADOS (sem alteração lógica)
 # =========================================================
 else:
     st.title("🗄️ Arquivados")
@@ -1181,7 +1179,6 @@ else:
             }
         )
 
-        # botões em cima (como no Acompanhamento)
         tL, tR1, tR2 = st.columns([1, 0.12, 0.12], gap="small")
         with tL:
             st.subheader("Arquivados")
