@@ -21,7 +21,7 @@ st.set_page_config(
 # UI / CSS (ÚNICO) — mantém 100% da lógica intacta
 # - Sidebar escura (Lovable-like)
 # - Cards mais clean
-# - Inputs com borda mais fina (sem “grosso”)
+# - Inputs com cantos arredondados PERFEITOS (fix BaseWeb)
 # =========================================================
 st.markdown(
     """
@@ -124,18 +124,64 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"]{
   font-weight: 800;
 }
 
-/* Inputs (borda MAIS FINA e foco suave) */
-div[data-baseweb="input"] > div,
-div[data-baseweb="select"] > div,
-div[data-baseweb="textarea"] > div{
+/* =========================================================
+   INPUTS — FIX COMPLETO dos cantos (TextInput/TextArea/Select)
+   BaseWeb tem múltiplas camadas; precisamos arredondar TODAS.
+   ========================================================= */
+
+/* camada extra usada em algumas versões */
+div[data-baseweb="base-input"]{
   border-radius: 14px !important;
-  border: 1px solid rgba(15,23,42,0.10) !important;
-  background: #FFFFFF !important;
-  box-shadow: none !important;
+  overflow: hidden !important;
 }
+
+/* wrappers principais */
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div{
+  border-radius: 14px !important;
+  overflow: hidden !important;                 /* <- corta cantos internos */
+  border: 1px solid rgba(15,23,42,0.10) !important;
+  box-shadow: none !important;
+  background: #FFFFFF !important;
+}
+
+/* pseudo-elementos que às vezes “quebram” o raio */
+div[data-baseweb="input"] > div::before,
+div[data-baseweb="input"] > div::after,
+div[data-baseweb="textarea"] > div::before,
+div[data-baseweb="textarea"] > div::after,
+div[data-baseweb="select"] > div::before,
+div[data-baseweb="select"] > div::after{
+  border-radius: 14px !important;
+}
+
+/* input/textarea internos */
+div[data-baseweb="input"] input{
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+div[data-baseweb="textarea"] textarea{
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* select interno (combobox) */
+div[data-baseweb="select"] div[role="combobox"]{
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* foco suave (sem “borda grossa”) */
 div[data-baseweb="input"] > div:focus-within,
-div[data-baseweb="select"] > div:focus-within,
-div[data-baseweb="textarea"] > div:focus-within{
+div[data-baseweb="textarea"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within{
   border-color: rgba(37,99,235,0.28) !important;
   box-shadow: 0 0 0 2px rgba(37,99,235,0.10) !important;
 }
@@ -360,7 +406,7 @@ def sidebar_layout() -> tuple[str, str]:
 @contextmanager
 def card_container():
     """
-    Streamlit mais novo: st.container(border=True) gera um wrapper com borda (que nosso CSS deixa lindo).
+    Streamlit mais novo: st.container(border=True) gera um wrapper com borda (nosso CSS deixa lindo).
     Streamlit antigo: cai em st.container() sem quebrar nada.
     """
     try:
@@ -572,15 +618,6 @@ def _only_digits_phone(s: str) -> str:
     return re.sub(r"[^0-9]", "", s or "")
 
 
-def _wa_web_link(phone_digits: str, text: str = "") -> str:
-    phone_digits = _only_digits_phone(phone_digits)
-    if not phone_digits:
-        return "https://web.whatsapp.com/"
-    phone = phone_digits if phone_digits.startswith("55") else "55" + phone_digits
-    text_q = (text or "").replace(" ", "%20").replace("\n", "%0A")
-    return f"https://web.whatsapp.com/send?phone={phone}&text={text_q}"
-
-
 def fetch_contatos_responsaveis() -> pd.DataFrame:
     res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
     return pd.DataFrame(res.data or [])
@@ -786,7 +823,6 @@ if page == f"📋 {dash_title}":
     with st.expander("Documento", expanded=False):
         colA, colB, colC = st.columns([1.15, 1.0, 0.85], gap="large")
 
-        # ✅ Cada coluna agora em um “card” (sem alterar lógica)
         with colA:
             with card_container():
                 st.markdown("##### Documento")
@@ -887,14 +923,13 @@ if page == f"📋 {dash_title}":
                         st.error(f"Erro ao salvar: {e}")
 
                 if st.button("Limpar", key="btn_clear_doc", use_container_width=True):
-                    # ✅ também deseleciona a linha no Acompanhamento
                     st.session_state.pop("tbl_dash", None)
                     st.session_state["current_selected_id"] = None
                     st.session_state["pending_select_id"] = None
                     _request_clear_doc_box()
                     st.rerun()
 
-    # --------- ACOMPANHAMENTO (SEM ALTERAÇÃO) ----------
+    # --------- ACOMPANHAMENTO ----------
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
@@ -941,7 +976,6 @@ if page == f"📋 {dash_title}":
 
         prev_id = st.session_state.get("current_selected_id")
 
-        # ✅ quando "desmarca" (volta sem seleção), limpa campos
         if clicked_id is None:
             if prev_id is not None:
                 st.session_state["current_selected_id"] = None
