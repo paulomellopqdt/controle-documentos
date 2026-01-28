@@ -21,15 +21,105 @@ st.set_page_config(
 # UI / CSS (ÚNICO) — mantém a lógica intacta
 # - Sidebar escura
 # - Cards clean
-# - Inputs com borda fina (sem borda duplicada BaseWeb)
+# - TextInput/TextArea/Select SEM BORDA (estilo original)
 # =========================================================
-st.markdown("""
+st.markdown(
+    """
 <style>
+:root{
+  --bg: #F6F8FC;
+  --card: #FFFFFF;
+  --text: #0F172A;
+  --muted: rgba(15, 23, 42, 0.62);
+  --border: rgba(15, 23, 42, 0.10);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --primary: #2563EB;
+}
+
+.stApp{ background: var(--bg); }
+
+.block-container{
+  padding-top: 1.6rem;
+  padding-bottom: 2rem;
+  max-width: 1400px;
+}
+
+h1,h2,h3{
+  letter-spacing: -0.35px;
+  line-height: 1.1;
+  color: var(--text);
+  padding-top: 0.25rem;
+}
+.small-muted{ color: var(--muted); font-size: 0.92rem; }
+
+/* Sidebar escura */
+section[data-testid="stSidebar"]{
+  background: linear-gradient(180deg, #0b1220 0%, #0a1020 100%);
+  border-right: 1px solid rgba(255,255,255,0.08);
+}
+section[data-testid="stSidebar"] .block-container{ padding-top: 1.2rem; }
+section[data-testid="stSidebar"] *{ color: rgba(255,255,255,0.92) !important; }
+section[data-testid="stSidebar"] hr{
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.10);
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label{
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
+  background: rgba(255,255,255,0.06);
+}
+section[data-testid="stSidebar"] .stButton>button{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: .60rem .95rem;
+  font-weight: 800;
+  transition: all 120ms ease;
+}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.18);
+}
+
+/* Cards (container com borda) */
+div[data-testid="stVerticalBlockBorderWrapper"]{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+/* Expander como card */
+details[data-testid="stExpander"]{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+details[data-testid="stExpander"] > summary{ padding: 10px 14px; }
+
+/* Métricas */
+div[data-testid="stMetric"]{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 14px;
+  box-shadow: var(--shadow);
+}
+div[data-testid="stMetric"] label{ opacity: 0.75; }
+div[data-testid="stMetric"] [data-testid="stMetricValue"]{
+  font-size: 1.75rem;
+  font-weight: 800;
+}
+
 /* =========================================================
    INPUTS — SEM BORDA (estilo original do app)
    ========================================================= */
-
-/* Wrapper BaseWeb */
 div[data-baseweb="input"] > div,
 div[data-baseweb="textarea"] > div,
 div[data-baseweb="select"] > div,
@@ -41,7 +131,6 @@ div[data-baseweb="base-input"]{
   border-radius: 0 !important;
 }
 
-/* Input interno */
 div[data-baseweb="input"] input,
 div[data-baseweb="textarea"] textarea{
   border: none !important;
@@ -51,7 +140,6 @@ div[data-baseweb="textarea"] textarea{
   border-radius: 0 !important;
 }
 
-/* Select interno */
 div[data-baseweb="select"] div[role="combobox"]{
   border: none !important;
   outline: none !important;
@@ -59,7 +147,6 @@ div[data-baseweb="select"] div[role="combobox"]{
   background: transparent !important;
 }
 
-/* Remove pseudo-elementos */
 div[data-baseweb="input"] > div::before,
 div[data-baseweb="input"] > div::after,
 div[data-baseweb="textarea"] > div::before,
@@ -69,7 +156,6 @@ div[data-baseweb="select"] > div::after{
   display: none !important;
 }
 
-/* Streamlit direto */
 .stTextInput input,
 .stTextArea textarea{
   border: none !important;
@@ -78,7 +164,6 @@ div[data-baseweb="select"] > div::after{
   background: transparent !important;
 }
 
-/* Foco SEM BORDA */
 div[data-baseweb="input"] > div:focus-within,
 div[data-baseweb="textarea"] > div:focus-within,
 div[data-baseweb="select"] > div:focus-within{
@@ -86,9 +171,62 @@ div[data-baseweb="select"] > div:focus-within{
   outline: none !important;
   box-shadow: none !important;
 }
-</style>
-""", unsafe_allow_html=True)
 
+/* Botões */
+.stButton>button{
+  border-radius: 14px;
+  padding: .60rem 1rem;
+  font-weight: 800;
+  border: 1px solid rgba(15,23,42,0.14);
+  background: rgba(37,99,235,0.10);
+  color: var(--primary);
+  transition: all 120ms ease;
+}
+.stButton>button:hover{
+  transform: translateY(-1px);
+  border-color: rgba(37,99,235,0.26);
+  background: rgba(37,99,235,0.16);
+}
+button[kind="primary"]{
+  background: var(--primary) !important;
+  color: #FFFFFF !important;
+  border: 1px solid rgba(37,99,235,0.35) !important;
+}
+
+/* Dataframes / Editor */
+div[data-testid="stDataFrame"], div[data-testid="stDataEditor"]{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+div[data-testid="stDataFrame"] table th,
+div[data-testid="stDataFrame"] table td,
+div[data-testid="stDataEditor"] table th,
+div[data-testid="stDataEditor"] table td{
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+hr{ border-color: rgba(15,23,42,0.10); }
+
+/* Badges */
+.badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 6px 10px; border-radius: 999px;
+  font-size: 0.85rem; border:1px solid rgba(15,23,42,0.12);
+}
+.badge-warn{ background: rgba(245,158,11,0.14); color: #854d0e; }
+.badge-ok{ background: rgba(34,197,94,0.12); color: #166534; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+RETORNO_STATUS = ["Pendente", "Respondido"]
+STATUS_DISPLAY = {"Pendente": "🔴 Pendente", "Respondido": "🟢 Respondido"}
+DISPLAY_TO_STATUS = {v: k for k, v in STATUS_DISPLAY.items()}
 
 # =========================================================
 # Supabase client
@@ -454,9 +592,6 @@ def salvar_ou_atualizar_solicitacao(
         ).execute()
 
 
-# =========================================================
-# Contatos por responsável (tabela: responsaveis_contatos)
-# =========================================================
 def fetch_contatos_responsaveis() -> pd.DataFrame:
     res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
     return pd.DataFrame(res.data or [])
@@ -478,9 +613,6 @@ def delete_contato_responsavel(contato_id: int):
     _sb_table("responsaveis_contatos").delete().eq("id", int(contato_id)).execute()
 
 
-# =========================================================
-# Helpers UI
-# =========================================================
 def _fmt_date_iso_to_ddmmyyyy(v):
     if not v:
         return "-"
@@ -572,7 +704,7 @@ def _apply_load_selected_into_doc_box(caso_id: int):
     st.session_state["doc_obs"] = _un_dash(caso.get("observacoes"))
 
     st.session_state["sol_assunto_solic"] = _un_dash(caso.get("assunto_solic"))
-    st.session_state["sol_prazo_om"] = pd.to_datetime(caso["prazo_om"]).date() if caso.get("prazo_om") else None
+    st.session_state["sol_prazo_om"] = pd.to_datetime(caso.get("prazo_om")).date() if caso.get("prazo_om") else None
     st.session_state["sol_doc_solicitado"] = _un_dash(caso.get("nr_doc_solicitado"))
     st.session_state["resp_nr_doc_resposta"] = _un_dash(caso.get("nr_doc_resposta"))
 
