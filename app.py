@@ -18,10 +18,10 @@ st.set_page_config(
 )
 
 # =========================================================
-# UI / CSS (ÚNICO) — mantém 100% da lógica intacta
-# - Sidebar escura (Lovable-like)
-# - Cards mais clean
-# - Inputs com cantos arredondados PERFEITOS (fix BaseWeb)
+# UI / CSS (ÚNICO) — mantém a lógica intacta
+# - Sidebar escura
+# - Cards clean
+# - Inputs com borda fina (sem borda duplicada BaseWeb)
 # =========================================================
 st.markdown(
     """
@@ -36,17 +36,14 @@ st.markdown(
   --primary: #2563EB;
 }
 
-/* Fundo */
 .stApp{ background: var(--bg); }
 
-/* Container */
 .block-container{
   padding-top: 1.6rem;
   padding-bottom: 2rem;
   max-width: 1400px;
 }
 
-/* Tipografia */
 h1,h2,h3{
   letter-spacing: -0.35px;
   line-height: 1.1;
@@ -67,8 +64,6 @@ section[data-testid="stSidebar"] hr{
   height: 1px;
   background: rgba(255,255,255,0.10);
 }
-
-/* Radios do menu (hover suave) */
 section[data-testid="stSidebar"] div[role="radiogroup"] label{
   border-radius: 12px;
   padding: 8px 10px;
@@ -76,8 +71,6 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label{
 section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{
   background: rgba(255,255,255,0.06);
 }
-
-/* Botões na sidebar */
 section[data-testid="stSidebar"] .stButton>button{
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.12);
@@ -92,7 +85,7 @@ section[data-testid="stSidebar"] .stButton>button:hover{
   border-color: rgba(255,255,255,0.18);
 }
 
-/* Containers com borda (st.container(border=True)) / Expander */
+/* Cards (container com borda) */
 div[data-testid="stVerticalBlockBorderWrapper"]{
   background: var(--card);
   border: 1px solid var(--border);
@@ -100,7 +93,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]{
   box-shadow: var(--shadow);
 }
 
-/* Expander mais “card” */
+/* Expander como card */
 details[data-testid="stExpander"]{
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -125,68 +118,79 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"]{
 }
 
 /* =========================================================
-   INPUTS — FIX COMPLETO dos cantos (TextInput/TextArea/Select)
-   BaseWeb tem múltiplas camadas; precisamos arredondar TODAS.
+   INPUTS — borda fina e padrão (remove borda duplicada)
    ========================================================= */
 
 /* camada extra usada em algumas versões */
 div[data-baseweb="base-input"]{
   border-radius: 14px !important;
   overflow: hidden !important;
+  background: transparent !important;
 }
 
-/* wrappers principais */
+/* wrapper do input/textarea/select = ÚNICA borda visível */
 div[data-baseweb="input"] > div,
 div[data-baseweb="textarea"] > div,
 div[data-baseweb="select"] > div{
   border-radius: 14px !important;
-  overflow: hidden !important;                 /* <- corta cantos internos */
-  border: 1px solid rgba(15,23,42,0.10) !important;
-  box-shadow: none !important;
+  overflow: hidden !important;
   background: #FFFFFF !important;
+
+  /* borda fina */
+  border: 1px solid rgba(15,23,42,0.09) !important;
+
+  /* remove “borda/sombra extra” que engrossa */
+  box-shadow: none !important;
+  outline: none !important;
 }
 
-/* pseudo-elementos que às vezes “quebram” o raio */
+/* REMOVE borda interna (borda duplicada) */
+div[data-baseweb="input"] input{
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+div[data-baseweb="textarea"] textarea{
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+
+/* Select interno */
+div[data-baseweb="select"] div[role="combobox"]{
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+
+/* pseudo-elementos (evita “dupla linha”) */
 div[data-baseweb="input"] > div::before,
 div[data-baseweb="input"] > div::after,
 div[data-baseweb="textarea"] > div::before,
 div[data-baseweb="textarea"] > div::after,
 div[data-baseweb="select"] > div::before,
 div[data-baseweb="select"] > div::after{
-  border-radius: 14px !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
-/* input/textarea internos */
-div[data-baseweb="input"] input{
-  border-radius: 14px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-div[data-baseweb="textarea"] textarea{
-  border-radius: 14px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
+/* força Streamlit a não criar borda extra */
+.stTextInput input, .stTextArea textarea{
+  border: 0 !important;
 }
 
-/* select interno (combobox) */
-div[data-baseweb="select"] div[role="combobox"]{
-  border-radius: 14px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-
-/* foco suave (sem “borda grossa”) */
+/* foco suave, sem engrossar */
 div[data-baseweb="input"] > div:focus-within,
 div[data-baseweb="textarea"] > div:focus-within,
 div[data-baseweb="select"] > div:focus-within{
-  border-color: rgba(37,99,235,0.28) !important;
+  border-color: rgba(37,99,235,0.22) !important;
   box-shadow: 0 0 0 2px rgba(37,99,235,0.10) !important;
 }
 
-/* Botões (geral) */
+/* Botões */
 .stButton>button{
   border-radius: 14px;
   padding: .60rem 1rem;
@@ -223,7 +227,6 @@ div[data-testid="stDataEditor"] table td{
   vertical-align: middle !important;
 }
 
-/* Separadores */
 hr{ border-color: rgba(15,23,42,0.10); }
 
 /* Badges */
@@ -405,10 +408,6 @@ def sidebar_layout() -> tuple[str, str]:
 # =========================================================
 @contextmanager
 def card_container():
-    """
-    Streamlit mais novo: st.container(border=True) gera um wrapper com borda (nosso CSS deixa lindo).
-    Streamlit antigo: cai em st.container() sem quebrar nada.
-    """
     try:
         with st.container(border=True):
             yield
@@ -614,10 +613,6 @@ def salvar_ou_atualizar_solicitacao(
 # =========================================================
 # Contatos por responsável (tabela: responsaveis_contatos)
 # =========================================================
-def _only_digits_phone(s: str) -> str:
-    return re.sub(r"[^0-9]", "", s or "")
-
-
 def fetch_contatos_responsaveis() -> pd.DataFrame:
     res = _sb_table("responsaveis_contatos").select("*").order("responsavel").order("contato_nome").execute()
     return pd.DataFrame(res.data or [])
@@ -791,7 +786,7 @@ if pending is not None:
     st.session_state["pending_select_id"] = None
 
 # =========================================================
-# PAGE: DASHBOARD (Acompanhamento sem alteração de lógica)
+# PAGE: DASHBOARD
 # =========================================================
 if page == f"📋 {dash_title}":
     hoje = date.today()
@@ -929,7 +924,6 @@ if page == f"📋 {dash_title}":
                     _request_clear_doc_box()
                     st.rerun()
 
-    # --------- ACOMPANHAMENTO ----------
     if df_acomp.empty:
         st.info("Nenhum item em acompanhamento.")
     else:
@@ -1080,10 +1074,6 @@ if page == f"📋 {dash_title}":
                                 st.session_state.pop(f"confirm_save_ret_{selected_id}", None)
                                 st.info("Salvamento cancelado.")
 
-
-# =========================================================
-# PAGE: RESPONSÁVEL
-# =========================================================
 elif page == "👥 Responsável":
     st.title("👥 Responsável")
     st.markdown('<div class="small-muted">Gestão de responsáveis e contatos</div>', unsafe_allow_html=True)
@@ -1186,10 +1176,6 @@ elif page == "👥 Responsável":
                 if st.button("❌", help="Cancelar", use_container_width=True, key="btn_ct_rm_no"):
                     st.session_state.pop("confirm_rm_contact", None)
 
-
-# =========================================================
-# PAGE: ARQUIVADOS (sem alteração lógica)
-# =========================================================
 else:
     st.title("🗄️ Arquivados")
     st.divider()
