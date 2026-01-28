@@ -1,19 +1,21 @@
 [theme]
-base="light"
-primaryColor="#2563EB"
-backgroundColor="#F6F8FC"
-secondaryBackgroundColor="#FFFFFF"
-textColor="#0F172A"
-font="sans serif"
+base = "light"
 
-[server]
-headless=true
-enableCORS=false
-enableXsrfProtection=true
+primaryColor = "#2563EB"            # Azul principal
+backgroundColor = "#F6F8FC"         # Fundo do app
+secondaryBackgroundColor = "#FFFFFF" # Cards e inputs
+textColor = "#0F172A"
 
-[browser]
-gatherUsageStats=false
+font = "sans serif"
+
+# inputs
+borderColor = "rgba(15, 23, 42, 0.18)"
+inputBorderRadius = 8
 
 [client]
-toolbarMode="minimal"
-showErrorDetails=false
+toolbarMode = "minimal"
+showErrorDetails = false
+
+[browser]
+gatherUsageStats = false
+
