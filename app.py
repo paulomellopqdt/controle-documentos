@@ -26,85 +26,12 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ======================================================
-   BASE
+   INPUTS PADRONIZADOS (IGUAIS AO SELECT)
    ====================================================== */
-.stApp { background: #F6F8FC; }
 
-.block-container{
-  padding-top: 1.6rem;
-  padding-bottom: 2rem;
-  max-width: 1400px;
-}
-
-h1,h2,h3{
-  color:#0F172A;
-  letter-spacing:-0.3px;
-}
-.small-muted{ color: rgba(15,23,42,.6); }
-
-/* ======================================================
-   SIDEBAR ESCURA
-   ====================================================== */
-section[data-testid="stSidebar"]{
-  background:#0B1220;
-  border-right:1px solid rgba(255,255,255,.08);
-}
-section[data-testid="stSidebar"] *{
-  color:#E6EAF2 !important;
-}
-
-/* ======================================================
-   CARDS / EXPANDERS
-   ====================================================== */
-div[data-testid="stVerticalBlockBorderWrapper"],
-details[data-testid="stExpander"]{
-  background:#FFFFFF;
-  border:1px solid rgba(15,23,42,.10);
-  border-radius:16px;
-  box-shadow:0 10px 28px rgba(15,23,42,.06);
-}
-
-/* ======================================================
-   MÉTRICAS
-   ====================================================== */
-div[data-testid="stMetric"]{
-  background:#FFFFFF;
-  border:1px solid rgba(15,23,42,.10);
-  border-radius:16px;
-  padding:14px;
-}
-
-/* ======================================================
-   TEXTINPUT / TEXTAREA  (SEM BORDA, FUNDO BRANCO)
-   ====================================================== */
+/* Wrapper geral */
 div[data-baseweb="input"] > div,
-div[data-baseweb="textarea"] > div{
-  background:#FFFFFF !important;
-  border:none !important;
-  box-shadow:none !important;
-  border-radius:12px !important;
-}
-
-div[data-baseweb="input"] input,
-div[data-baseweb="textarea"] textarea{
-  background:#FFFFFF !important;
-  border:none !important;
-  box-shadow:none !important;
-  outline:none !important;
-  color:#0F172A !important;
-}
-
-/* remove pseudo-bordas internas */
-div[data-baseweb="input"] > div::before,
-div[data-baseweb="input"] > div::after,
-div[data-baseweb="textarea"] > div::before,
-div[data-baseweb="textarea"] > div::after{
-  display:none !important;
-}
-
-/* ======================================================
-   SELECT / MULTISELECT / DATEINPUT  (COM BORDA FINA)
-   ====================================================== */
+div[data-baseweb="textarea"] > div,
 div[data-baseweb="select"] > div,
 div[data-baseweb="datepicker"] > div{
   background:#FFFFFF !important;
@@ -113,40 +40,46 @@ div[data-baseweb="datepicker"] > div{
   box-shadow:none !important;
 }
 
-div[data-baseweb="select"] div[role="combobox"]{
+/* Input interno */
+div[data-baseweb="input"] input,
+div[data-baseweb="textarea"] textarea{
   background:#FFFFFF !important;
+  border:none !important;
+  outline:none !important;
+  box-shadow:none !important;
   color:#0F172A !important;
 }
 
-/* ======================================================
-   BOTÕES
-   ====================================================== */
-.stButton>button{
-  border-radius:14px;
-  padding:.6rem 1rem;
-  font-weight:700;
+/* Select interno */
+div[data-baseweb="select"] div[role="combobox"]{
+  background:#FFFFFF !important;
+  color:#0F172A !important;
+  border:none !important;
+  outline:none !important;
+  box-shadow:none !important;
 }
 
-button[kind="primary"]{
-  background:#2563EB !important;
-  color:#FFFFFF !important;
-  border:1px solid rgba(37,99,235,.35) !important;
+/* Remove pseudo-bordas duplicadas */
+div[data-baseweb="input"] > div::before,
+div[data-baseweb="input"] > div::after,
+div[data-baseweb="textarea"] > div::before,
+div[data-baseweb="textarea"] > div::after,
+div[data-baseweb="select"] > div::before,
+div[data-baseweb="select"] > div::after{
+  display:none !important;
 }
 
-/* ======================================================
-   TABELAS
-   ====================================================== */
-div[data-testid="stDataFrame"],
-div[data-testid="stDataEditor"]{
-  background:#FFFFFF;
-  border:1px solid rgba(15,23,42,.10);
-  border-radius:16px;
-  overflow:hidden;
+/* Focus elegante (todos iguais) */
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within,
+div[data-baseweb="datepicker"] > div:focus-within{
+  border-color: rgba(37,99,235,.45) !important;
+  box-shadow: 0 0 0 2px rgba(37,99,235,.12) !important;
 }
-
-hr{ border-color:rgba(15,23,42,.10); }
 </style>
 """, unsafe_allow_html=True)
+
 
 # =========================================================
 # Supabase client
