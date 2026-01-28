@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# UI / CSS (SEM mexer em inputs)
+# UI / CSS  (SEM MEXER EM INPUTS)
 # =========================================================
 st.markdown("""
 <style>
@@ -60,7 +60,7 @@ section[data-testid="stSidebar"] hr{
   height:1px;
 }
 
-/* Cards */
+/* Cards e Expanders */
 div[data-testid="stVerticalBlockBorderWrapper"],
 details[data-testid="stExpander"]{
   background:var(--card);
@@ -90,7 +90,7 @@ button[kind="primary"]{
   border:1px solid rgba(37,99,235,.35)!important;
 }
 
-/* Dataframes */
+/* Tabelas */
 div[data-testid="stDataFrame"],
 div[data-testid="stDataEditor"]{
   background:var(--card);
@@ -125,7 +125,7 @@ def _sb_table(name: str):
     return get_supabase().table(name)
 
 # =========================================================
-# AUTH (inalterado)
+# AUTH
 # =========================================================
 def require_auth():
     st.session_state.setdefault("sb_session", None)
@@ -135,6 +135,7 @@ def require_auth():
         return
 
     st.title("🔐 Controle de Documentos")
+
     with st.form("login"):
         email = st.text_input("Email")
         senha = st.text_input("Senha", type="password")
@@ -181,7 +182,7 @@ if page == "📋 Dashboard":
     st.markdown('<div class="small-muted">Cadastro e acompanhamento</div>', unsafe_allow_html=True)
 
     with st.expander("Documento", expanded=True):
-        c1, c2, c3 = st.columns([1.2,1,0.8])
+        c1, c2, c3 = st.columns([1.2, 1, 0.8])
 
         with c1:
             st.text_input("Nr (Recebido)")
