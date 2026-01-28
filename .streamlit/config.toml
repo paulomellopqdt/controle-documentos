@@ -1,7 +1,19 @@
 [theme]
 base="light"
-primaryColor="#22C55E"
-backgroundColor="#FFFFFF"
-secondaryBackgroundColor="#0B1220"
+primaryColor="#2563EB"
+backgroundColor="#F6F8FC"
+secondaryBackgroundColor="#FFFFFF"
 textColor="#0F172A"
 font="sans serif"
+
+[server]
+headless=true
+enableCORS=false
+enableXsrfProtection=true
+
+[browser]
+gatherUsageStats=false
+
+[client]
+toolbarMode="minimal"
+showErrorDetails=false
